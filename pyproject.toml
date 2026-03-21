@@ -1,0 +1,26 @@
+[build-system]
+requires = ["hatchling>=1.27.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marketing-fox"
+version = "0.1.0"
+description = "Personal marketing agent analytics package."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0.0",
+  "ruff>=0.6.0"
+]
+
+[project.scripts]
+marketing-fox-py = "marketing_fox.main:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/python/marketing_fox"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src/python"]
