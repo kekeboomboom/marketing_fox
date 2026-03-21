@@ -6,7 +6,8 @@
   "description": "Personal marketing agent for X, XiaoHongShu, and WeChat Official Accounts.",
   "scripts": {
     "dev": "tsx src/ts/index.ts",
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "test:ts": "node --import tsx --test tests/ts/**/*.test.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

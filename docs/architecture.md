@@ -15,6 +15,7 @@ The project is split by runtime responsibility instead of by framework trend.
 - `src/ts/agents/marketing-agent.ts`: top-level marketing agent definition
 - `src/ts/connectors/platform.ts`: platform connector contract
 - `src/ts/config/platforms.ts`: supported platform metadata
+- `src/ts/publishing/python-runner.ts`: bridge into the Python publishing runner
 
 This layer should answer:
 
@@ -28,6 +29,7 @@ This layer should answer:
 - `src/python/marketing_fox/agent.py`: analytics-oriented agent model
 - `src/python/marketing_fox/config.py`: supported platform configuration
 - `src/python/marketing_fox/connectors/base.py`: connector protocol for future Python-side integrations
+- `src/python/marketing_fox/publishing/`: draft generation and platform publish adapters
 
 This layer should answer:
 
@@ -40,7 +42,8 @@ This layer should answer:
 1. TypeScript collects the current campaign context and publishing objectives.
 2. Shared platform definitions normalize what each channel expects.
 3. Python evaluates content ideas, scores opportunities, and returns guidance.
-4. TypeScript presents the next action or triggers follow-up workflows.
+4. TypeScript invokes the Python publishing runner when the workflow needs a real draft or publish action.
+5. Python expands the source idea, executes the platform connector, and returns a normalized publish result.
 
 ## Design Constraints
 
@@ -48,3 +51,4 @@ This layer should answer:
 - Secrets stay in environment variables and are never embedded in code.
 - New platform support should start with docs and config contracts before API code.
 - Keep the system runnable locally without external infrastructure in the first phase.
+- `小红书` uses browser automation rather than a public creator-post API in v1.

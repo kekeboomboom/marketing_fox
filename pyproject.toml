@@ -8,7 +8,10 @@ version = "0.1.0"
 description = "Personal marketing agent analytics package."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = [
+  "playwright>=1.53.0",
+  "tweepy>=4.15.0"
+]
 
 [project.optional-dependencies]
 dev = [
@@ -18,6 +21,7 @@ dev = [
 
 [project.scripts]
 marketing-fox-py = "marketing_fox.main:main"
+marketing-fox-publish = "marketing_fox.publishing.runner:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/python/marketing_fox"]

@@ -33,7 +33,7 @@ Build a personal marketing agent that helps creators and operators grow audience
 
 ## Non-Goals For The First Version
 
-- Full autonomous posting to every platform
+- Full autonomous posting to every platform with cloud-only operation
 - Complex CRM or ad-buying integration
 - Multi-tenant account management
 - Large-scale workflow orchestration infrastructure
@@ -45,3 +45,11 @@ Build a personal marketing agent that helps creators and operators grow audience
 3. Topic backlog management
 4. Performance scoring and feedback loops
 5. Approval-friendly publishing preparation
+6. Local-machine publishing adapters where APIs or browser automation are viable
+
+## Publishing Delivery Notes
+
+- `小红书` publishing is implemented via local browser automation with a persistent user session.
+- `微信公众号` publishing follows the draft-and-publish article model.
+- `X` publishing targets single-post creation first.
+- A short idea is treated as source input and expanded into platform-native draft content before publish.

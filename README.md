@@ -59,6 +59,21 @@ The first milestone is not full auto-posting. It is a reliable internal core tha
 4. Score content ideas and performance signals.
 5. Prepare the codebase for later scheduling, approval, and publishing flows.
 
+## Publishing v1
+
+Publishing is Python-first in the current implementation:
+
+- Python owns draft expansion and publishing adapters.
+- TypeScript remains the operator-facing orchestration layer and shells into Python for execution.
+- `小红书` uses browser automation with a persistent local profile.
+- `微信公众号` and `X` use official API-oriented connectors.
+
+Example:
+
+```bash
+npm run dev -- publish xiaohongshu "用 15 个字讲清楚一个内容增长动作"
+```
+
 ## Docs
 
 - [Product Scope](./docs/product-scope.md)

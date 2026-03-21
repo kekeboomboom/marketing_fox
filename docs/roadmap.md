@@ -23,3 +23,11 @@
 - Add approval queues
 - Add publishing adapters where APIs or browser automation are viable
 - Add reusable workflows for repurposing one idea across channels
+
+## Current v1 Delivery
+
+- Python-first publishing core with normalized request/result schema
+- TS-to-Python orchestration bridge for manual publish runs
+- `小红书` browser-session automation on the local operator machine
+- `微信公众号` draft/publish API connector
+- `X` single-post API connector
