@@ -66,6 +66,7 @@ Publishing is Python-first in the current implementation:
 - Python owns draft expansion and publishing adapters.
 - TypeScript remains the operator-facing orchestration layer and shells into Python for execution.
 - `小红书` uses browser automation with a persistent local profile.
+- `小红书` note publishing defaults to the `上传图文 -> 文字配图` flow, keeps the default generated preview card, selects one `智能标题`, and selects three suggested `话题` before publish.
 - `微信公众号` and `X` use official API-oriented connectors.
 
 Example:

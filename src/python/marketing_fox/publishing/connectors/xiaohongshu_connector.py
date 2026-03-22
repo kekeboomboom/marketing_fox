@@ -13,6 +13,7 @@ DEFAULT_URL = "https://creator.xiaohongshu.com/publish/publish"
 TITLE_SELECTORS = [
     "input[placeholder*='标题']",
     "input[placeholder*='填写标题']",
+    "input[placeholder*='更多赞']",
     "textarea[placeholder*='标题']",
     "[contenteditable='true'][data-placeholder*='标题']",
 ]
@@ -30,6 +31,37 @@ IMAGE_NOTE_TAB_SELECTORS = [
 TAG_SELECTORS = [
     "input[placeholder*='话题']",
     "input[placeholder*='标签']",
+]
+TEXT_IMAGE_ENTRY_SELECTORS = [
+    "button:has-text('文字配图')",
+    "text=文字配图",
+]
+TEXT_IMAGE_EDITOR_SELECTORS = [
+    "div[contenteditable='true'][role='textbox']",
+    "[contenteditable='true'][role='textbox']",
+    "[contenteditable='true']",
+]
+GENERATE_IMAGE_SELECTORS = [
+    "button:has-text('生成图片')",
+    "text=生成图片",
+]
+NEXT_STEP_SELECTORS = [
+    "button:has-text('下一步')",
+    "text=下一步",
+]
+SMART_TITLE_TRIGGER_SELECTORS = [
+    "button:has-text('智能标题')",
+    "text=智能标题",
+]
+SMART_TITLE_ITEM_SELECTORS = [
+    ".creator-title-recommend-popover .title-dropdown-container .item",
+    ".creator-title-recommend-popover .item",
+]
+TOPIC_TRIGGER_SELECTORS = [
+    "button:has-text('话题')",
+]
+TOPIC_ITEM_SELECTORS = [
+    ".tippy-box .items .item",
 ]
 PUBLISH_SELECTORS = [
     "button:has-text('发布')",
@@ -95,8 +127,7 @@ class XiaohongshuConnector(PublishConnector):
                 )
                 page = browser.new_page()
                 page.goto(intent.options.get("xhs_publish_url", DEFAULT_URL), wait_until="domcontentloaded")
-                _wait_for_compose_ready(page)
-                _switch_to_image_note_tab(page)
+                _wait_for_publish_home(page)
 
                 if _looks_logged_out(page):
                     browser.close()
@@ -107,70 +138,14 @@ class XiaohongshuConnector(PublishConnector):
                         "Xiaohongshu session is not logged in. Complete a manual login in the persistent profile first.",
                     )
 
-                image_paths = _resolve_note_image_assets(intent, context)
-                _upload_note_images(page, image_paths)
-                _wait_for_note_editor(page)
+                flow = str(intent.options.get("xhs_note_flow") or "").strip().lower()
+                if flow == "legacy_upload":
+                    result = self._run_legacy_upload_flow(intent, draft, context, page, screenshots)
+                else:
+                    result = self._run_text_image_flow(intent, draft, context, page, screenshots)
 
-                title_filled = _fill_first(page, TITLE_SELECTORS, draft.title or intent.source_idea)
-                body_filled = _fill_first(page, BODY_SELECTORS, draft.body or intent.source_idea)
-                _fill_tags(page, draft.tags)
-                page.wait_for_timeout(3000)
-
-                if not title_filled or not body_filled:
-                    browser.close()
-                    return self.failed_result(
-                        intent,
-                        draft,
-                        "editor_not_ready",
-                        "Xiaohongshu note editor fields were not available after switching to 图文模式.",
-                    )
-
-                compose_path = context.child_path("xiaohongshu-compose.png")
-                page.screenshot(path=str(compose_path), full_page=True)
-                screenshots.append(str(compose_path))
-
-                if intent.mode == "prepare":
-                    browser.close()
-                    return self.prepared_result(
-                        intent,
-                        draft,
-                        "Prepared Xiaohongshu compose screen in the browser profile.",
-                        screenshots=screenshots,
-                    )
-
-                if intent.mode == "draft":
-                    browser.close()
-                    return self.drafted_result(
-                        intent,
-                        draft,
-                        "Filled Xiaohongshu compose form and stopped before publish.",
-                        screenshots=screenshots,
-                    )
-
-                publish_clicked = _click_visible_first(page, PUBLISH_SELECTORS)
-                if not publish_clicked:
-                    browser.close()
-                    return self.failed_result(
-                        intent,
-                        draft,
-                        "selector_missing",
-                        "Unable to locate Xiaohongshu publish button.",
-                        screenshots=screenshots,
-                    )
-
-                page.wait_for_timeout(2500)
-                after_path = context.child_path("xiaohongshu-after-publish.png")
-                page.screenshot(path=str(after_path), full_page=True)
-                screenshots.append(str(after_path))
-                current_url = page.url
                 browser.close()
-                return self.published_result(
-                    intent,
-                    draft,
-                    "Submitted Xiaohongshu publish action.",
-                    platform_url=current_url,
-                    screenshots=screenshots,
-                )
+                return result
         except Exception as error:  # pragma: no cover - depends on local browser/session state.
             return self.failed_result(
                 intent,
@@ -180,6 +155,209 @@ class XiaohongshuConnector(PublishConnector):
                 retryable=True,
                 screenshots=screenshots,
             )
+
+    def _run_text_image_flow(
+        self,
+        intent: PublishIntent,
+        draft: DraftArtifact,
+        context: RunContext,
+        page: Any,
+        screenshots: list[str],
+    ) -> PublishResult:
+        _switch_to_image_note_tab(page)
+        if not _click_visible_first(page, TEXT_IMAGE_ENTRY_SELECTORS):
+            return self.failed_result(
+                intent,
+                draft,
+                "selector_missing",
+                "Unable to locate the Xiaohongshu 文字配图 entry point.",
+                screenshots=screenshots,
+            )
+
+        _wait_for_text_image_editor(page)
+        note_text = _build_text_image_note_text(draft, intent)
+        note_filled = _fill_first(page, TEXT_IMAGE_EDITOR_SELECTORS, note_text)
+        if not note_filled:
+            return self.failed_result(
+                intent,
+                draft,
+                "editor_not_ready",
+                "Unable to locate the Xiaohongshu 文字配图 editor.",
+                screenshots=screenshots,
+            )
+
+        compose_path = context.child_path("xiaohongshu-text-image-compose.png")
+        page.screenshot(path=str(compose_path), full_page=True)
+        screenshots.append(str(compose_path))
+
+        if intent.mode == "prepare":
+            return self.prepared_result(
+                intent,
+                draft,
+                "Prepared Xiaohongshu 文字配图 editor with the generated note text.",
+                screenshots=screenshots,
+            )
+
+        if not _click_visible_first(page, GENERATE_IMAGE_SELECTORS):
+            return self.failed_result(
+                intent,
+                draft,
+                "selector_missing",
+                "Unable to locate the Xiaohongshu 生成图片 button.",
+                screenshots=screenshots,
+            )
+
+        preview_ready = _wait_for_preview_page(page)
+        if not preview_ready and _click_visible_first(page, GENERATE_IMAGE_SELECTORS):
+            preview_ready = _wait_for_preview_page(page)
+        if not preview_ready:
+            return self.failed_result(
+                intent,
+                draft,
+                "preview_not_ready",
+                "Xiaohongshu did not advance to the preview page after generating images.",
+                screenshots=screenshots,
+            )
+
+        preview_path = context.child_path("xiaohongshu-text-image-preview.png")
+        page.screenshot(path=str(preview_path), full_page=True)
+        screenshots.append(str(preview_path))
+
+        if not _click_visible_first(page, NEXT_STEP_SELECTORS):
+            return self.failed_result(
+                intent,
+                draft,
+                "selector_missing",
+                "Unable to locate the Xiaohongshu 下一步 button after image generation.",
+                screenshots=screenshots,
+            )
+
+        publish_ready = _wait_for_publish_editor(page)
+        if not publish_ready:
+            return self.failed_result(
+                intent,
+                draft,
+                "editor_not_ready",
+                "Xiaohongshu did not reach the publish page after the preview step.",
+                screenshots=screenshots,
+            )
+        selected_title = _apply_smart_title(page, draft.title)
+        selected_topics = _apply_topic_suggestions(page, limit=3)
+
+        publish_ready_path = context.child_path("xiaohongshu-publish-ready.png")
+        page.screenshot(path=str(publish_ready_path), full_page=True)
+        screenshots.append(str(publish_ready_path))
+
+        logs = [
+            "Completed the Xiaohongshu 文字配图 flow and reached the publish page.",
+        ]
+        if selected_title:
+            logs.append(f"Applied smart title: {selected_title}")
+        if selected_topics:
+            logs.append(f"Selected topics: {', '.join(selected_topics)}")
+
+        if intent.mode == "draft":
+            return self.drafted_result(
+                intent,
+                draft,
+                *logs,
+                platform_url=page.url,
+                screenshots=screenshots,
+            )
+
+        publish_clicked = _click_visible_first(page, PUBLISH_SELECTORS)
+        if not publish_clicked:
+            return self.failed_result(
+                intent,
+                draft,
+                "selector_missing",
+                "Unable to locate Xiaohongshu publish button.",
+                *logs,
+                screenshots=screenshots,
+            )
+
+        page.wait_for_timeout(2500)
+        after_path = context.child_path("xiaohongshu-after-publish.png")
+        page.screenshot(path=str(after_path), full_page=True)
+        screenshots.append(str(after_path))
+        return self.published_result(
+            intent,
+            draft,
+            *logs,
+            "Submitted Xiaohongshu publish action.",
+            platform_url=page.url,
+            screenshots=screenshots,
+        )
+
+    def _run_legacy_upload_flow(
+        self,
+        intent: PublishIntent,
+        draft: DraftArtifact,
+        context: RunContext,
+        page: Any,
+        screenshots: list[str],
+    ) -> PublishResult:
+        _switch_to_image_note_tab(page)
+        image_paths = _resolve_note_image_assets(intent, context)
+        _upload_note_images(page, image_paths)
+        _wait_for_note_editor(page)
+
+        title_filled = _fill_first(page, TITLE_SELECTORS, draft.title or intent.source_idea)
+        body_filled = _fill_first(page, BODY_SELECTORS, draft.body or intent.source_idea)
+        _fill_tags(page, draft.tags)
+        page.wait_for_timeout(3000)
+
+        if not title_filled or not body_filled:
+            return self.failed_result(
+                intent,
+                draft,
+                "editor_not_ready",
+                "Xiaohongshu note editor fields were not available after switching to 图文模式.",
+                screenshots=screenshots,
+            )
+
+        compose_path = context.child_path("xiaohongshu-compose.png")
+        page.screenshot(path=str(compose_path), full_page=True)
+        screenshots.append(str(compose_path))
+
+        if intent.mode == "prepare":
+            return self.prepared_result(
+                intent,
+                draft,
+                "Prepared Xiaohongshu compose screen in the browser profile.",
+                screenshots=screenshots,
+            )
+
+        if intent.mode == "draft":
+            return self.drafted_result(
+                intent,
+                draft,
+                "Filled Xiaohongshu compose form and stopped before publish.",
+                platform_url=page.url,
+                screenshots=screenshots,
+            )
+
+        publish_clicked = _click_visible_first(page, PUBLISH_SELECTORS)
+        if not publish_clicked:
+            return self.failed_result(
+                intent,
+                draft,
+                "selector_missing",
+                "Unable to locate Xiaohongshu publish button.",
+                screenshots=screenshots,
+            )
+
+        page.wait_for_timeout(2500)
+        after_path = context.child_path("xiaohongshu-after-publish.png")
+        page.screenshot(path=str(after_path), full_page=True)
+        screenshots.append(str(after_path))
+        return self.published_result(
+            intent,
+            draft,
+            "Submitted Xiaohongshu publish action.",
+            platform_url=page.url,
+            screenshots=screenshots,
+        )
 
 
 def _fill_first(page: Any, selectors: list[str], value: str) -> bool:
@@ -201,13 +379,13 @@ def _fill_first(page: Any, selectors: list[str], value: str) -> bool:
     return False
 
 
-def _wait_for_compose_ready(page: Any) -> None:
+def _wait_for_publish_home(page: Any) -> None:
     try:
         page.wait_for_load_state("networkidle", timeout=15000)
     except Exception:
         pass
 
-    compose_selectors = TITLE_SELECTORS + BODY_SELECTORS + TAG_SELECTORS
+    compose_selectors = IMAGE_NOTE_TAB_SELECTORS + TEXT_IMAGE_ENTRY_SELECTORS
     for selector in compose_selectors:
         try:
             page.wait_for_selector(selector, timeout=3000)
@@ -233,6 +411,43 @@ def _wait_for_note_editor(page: Any) -> None:
             except Exception:
                 continue
         page.wait_for_timeout(2000)
+
+
+def _wait_for_text_image_editor(page: Any) -> None:
+    for _ in range(5):
+        for selector in TEXT_IMAGE_EDITOR_SELECTORS + GENERATE_IMAGE_SELECTORS:
+            try:
+                page.wait_for_selector(selector, timeout=3000)
+                return
+            except Exception:
+                continue
+        page.wait_for_timeout(2000)
+
+
+def _wait_for_preview_page(page: Any) -> bool:
+    for _ in range(10):
+        for selector in ["text=预览图片"] + NEXT_STEP_SELECTORS:
+            try:
+                page.wait_for_selector(selector, timeout=2000)
+                page.wait_for_timeout(1000)
+                return True
+            except Exception:
+                continue
+        page.wait_for_timeout(2000)
+    return False
+
+
+def _wait_for_publish_editor(page: Any) -> bool:
+    for _ in range(10):
+        for selector in TITLE_SELECTORS + BODY_SELECTORS + SMART_TITLE_TRIGGER_SELECTORS + PUBLISH_SELECTORS:
+            try:
+                page.wait_for_selector(selector, timeout=2000)
+                page.wait_for_timeout(1000)
+                return True
+            except Exception:
+                continue
+        page.wait_for_timeout(2000)
+    return False
 
 
 def _upload_note_images(page: Any, image_paths: list[Path]) -> None:
@@ -267,16 +482,6 @@ def _fill_tags(page: Any, tags: list[str]) -> None:
             except Exception:
                 break
         return
-
-
-def _click_first(page: Any, selectors: list[str]) -> bool:
-    for selector in selectors:
-        locator = page.locator(selector).first
-        if locator.count() == 0:
-            continue
-        locator.click()
-        return True
-    return False
 
 
 def _click_visible_first(page: Any, selectors: list[str]) -> bool:
@@ -321,6 +526,121 @@ def _find_first_locator_in_view_or_hidden(page: Any, selectors: list[str]) -> An
             except Exception:
                 continue
 
+    return None
+
+
+def _find_first_visible_locator(page: Any, selectors: list[str]) -> Any | None:
+    for selector in selectors:
+        locator = page.locator(selector)
+        count = locator.count()
+        if count == 0:
+            continue
+
+        for index in range(count):
+            candidate = locator.nth(index)
+            try:
+                box = candidate.bounding_box()
+                if not candidate.is_visible() or box is None:
+                    continue
+                if box["x"] < 0 or box["y"] < 0 or box["width"] <= 0 or box["height"] <= 0:
+                    continue
+                return candidate
+            except Exception:
+                continue
+
+    return None
+
+
+def _build_text_image_note_text(draft: DraftArtifact, intent: PublishIntent) -> str:
+    text = (draft.body or intent.source_idea).strip()
+    if text:
+        return text
+    return intent.source_idea.strip()
+
+
+def _apply_smart_title(page: Any, fallback_title: str | None = None) -> str | None:
+    title_input = _find_first_visible_locator(page, TITLE_SELECTORS)
+    if title_input is None:
+        return None
+
+    try:
+        current_value = title_input.input_value().strip()
+        if current_value:
+            return current_value
+    except Exception:
+        current_value = ""
+
+    if _click_visible_first(page, SMART_TITLE_TRIGGER_SELECTORS):
+        page.wait_for_timeout(1500)
+        suggestion = _pick_first_visible_text(page, SMART_TITLE_ITEM_SELECTORS)
+        if suggestion:
+            page.wait_for_timeout(1000)
+            try:
+                selected_value = title_input.input_value().strip()
+                if selected_value:
+                    return selected_value
+            except Exception:
+                pass
+
+    if fallback_title:
+        try:
+            title_input.fill(fallback_title)
+            return fallback_title
+        except Exception:
+            pass
+
+    return current_value or None
+
+
+def _apply_topic_suggestions(page: Any, limit: int = 3) -> list[str]:
+    selected: list[str] = []
+    seen = set()
+    for _ in range(limit):
+        if not _click_visible_first(page, TOPIC_TRIGGER_SELECTORS):
+            break
+        page.wait_for_timeout(1000)
+        topic = _pick_topic_item(page, seen)
+        if not topic:
+            break
+        selected.append(topic)
+        seen.add(topic)
+        page.wait_for_timeout(500)
+    return selected
+
+
+def _pick_first_visible_text(page: Any, selectors: list[str]) -> str | None:
+    locator = _find_first_visible_locator(page, selectors)
+    if locator is None:
+        return None
+
+    try:
+        text = locator.inner_text().strip()
+    except Exception:
+        return None
+
+    if not text:
+        return None
+
+    locator.click(timeout=2000)
+    return text
+
+
+def _pick_topic_item(page: Any, seen: set[str]) -> str | None:
+    locator = page.locator(TOPIC_ITEM_SELECTORS[0])
+    count = locator.count()
+    for index in range(count):
+        candidate = locator.nth(index)
+        try:
+            label = candidate.locator(".name").inner_text(timeout=1000).strip()
+        except Exception:
+            continue
+        if not label or label in seen:
+            continue
+        classes = (candidate.get_attribute("class") or "").strip()
+        if "is-selected" in classes:
+            continue
+        candidate.click(timeout=2000)
+        return label
     return None
 
 

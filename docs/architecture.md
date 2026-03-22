@@ -53,3 +53,5 @@ This layer should answer:
 - Keep the system runnable locally without external infrastructure in the first phase.
 - `小红书` uses browser automation rather than a public creator-post API in v1.
 - `小红书` server deployment should preserve a persistent browser profile and treat re-login as an operator workflow instead of an automatic retry path.
+- The default `小红书` note-publishing path is the `上传图文 -> 文字配图` browser flow, not direct image upload.
+- In the default `小红书` flow, the system should generate the image from text, keep the default preview card, apply one suggested `智能标题`, select three suggested `话题`, and then publish unless the operator explicitly asks to stop earlier.

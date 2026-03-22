@@ -23,6 +23,20 @@ The long-term product may expand to YouTube, TikTok, Facebook, Bilibili, Douyin,
 - Update `docs/product-scope.md` and `docs/architecture.md` when adding a new platform or major subsystem.
 - Prefer small, explicit abstractions over premature framework setup.
 
+## Operator Defaults
+
+- When the user asks to "publish/post a Xiaohongshu note" without specifying a format, default to the current `图文` flow via `文字配图`.
+- The default Xiaohongshu publishing sequence is:
+  1. Open `上传图文`
+  2. Choose `文字配图`
+  3. Enter the note text
+  4. Click `生成图片`
+  5. Keep the default preview card and click `下一步`
+  6. On the publish page, use `智能标题` to pick one suggested title
+  7. Use `话题` to pick three suggested topics
+  8. Publish unless the user explicitly asks to stop at draft/review mode
+- Treat this as the repo-wide default behavior for future Xiaohongshu note publishing requests unless the user gives a different instruction.
+
 ## Initial Layout
 
 - `src/ts`: orchestration and connector contracts
