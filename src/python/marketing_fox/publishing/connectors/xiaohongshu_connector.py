@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-import struct
 import os
+import struct
+import zlib
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-import zlib
 
 from ..models import DraftArtifact, PublishIntent, PublishResult, RunContext
 from .base import PublishConnector
@@ -73,6 +74,24 @@ IMAGE_UPLOAD_SELECTORS = [
     "input.upload-input[type='file'][accept*='.jpg']",
     "input[type='file'][accept*='.jpg']",
 ]
+LOGGED_OUT_SELECTORS = [
+    "input[placeholder='手机号']",
+    "input[placeholder='验证码']",
+    "text=短信登录",
+    "text=发送验证码",
+]
+LOGGED_IN_SELECTORS = IMAGE_NOTE_TAB_SELECTORS + TEXT_IMAGE_ENTRY_SELECTORS + PUBLISH_SELECTORS
+
+
+@dataclass(frozen=True)
+class XiaohongshuBrowserSettings:
+    profile_dir: Path
+    headless: bool
+    executable_path: str | None
+    channel: str | None
+    locale: str | None
+    timezone_id: str | None
+    launch_args: list[str]
 
 
 class XiaohongshuConnector(PublishConnector):
@@ -110,20 +129,19 @@ class XiaohongshuConnector(PublishConnector):
         if self._playwright_module is None:
             return self.prepared_result(intent, draft, "Prepared Xiaohongshu note draft.")
 
-        profile_dir = Path(
-            intent.options.get("xhs_profile_dir")
-            or os.getenv("XHS_PROFILE_DIR")
-            or ".local/xhs-profile"
-        )
-        profile_dir.mkdir(parents=True, exist_ok=True)
-        headless = str(intent.options.get("headless") or os.getenv("XHS_HEADLESS", "false")).lower()
+        settings = _resolve_browser_settings(intent.options)
         screenshots: list[str] = []
 
         try:
             with self._playwright_module() as playwright:
                 browser = playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(profile_dir),
-                    headless=headless == "true",
+                    user_data_dir=str(settings.profile_dir),
+                    headless=settings.headless,
+                    executable_path=settings.executable_path,
+                    channel=settings.channel,
+                    locale=settings.locale,
+                    timezone_id=settings.timezone_id,
+                    args=settings.launch_args,
                 )
                 page = browser.new_page()
                 page.goto(intent.options.get("xhs_publish_url", DEFAULT_URL), wait_until="domcontentloaded")
@@ -558,6 +576,61 @@ def _build_text_image_note_text(draft: DraftArtifact, intent: PublishIntent) -> 
     return intent.source_idea.strip()
 
 
+def _resolve_browser_settings(options: dict[str, Any] | None = None) -> XiaohongshuBrowserSettings:
+    options = options or {}
+    profile_dir = Path(
+        options.get("xhs_profile_dir")
+        or os.getenv("XHS_PROFILE_DIR")
+        or ".local/xhs-profile"
+    )
+    profile_dir.mkdir(parents=True, exist_ok=True)
+
+    headless_value = str(options.get("headless") or os.getenv("XHS_HEADLESS", "false")).strip().lower()
+    executable_path = str(
+        options.get("browser_executable_path")
+        or os.getenv("XHS_BROWSER_EXECUTABLE_PATH")
+        or ""
+    ).strip() or None
+    channel = str(
+        options.get("browser_channel")
+        or os.getenv("XHS_BROWSER_CHANNEL")
+        or ""
+    ).strip() or None
+    locale = str(
+        options.get("locale")
+        or os.getenv("XHS_LOCALE")
+        or "zh-CN"
+    ).strip() or None
+    timezone_id = str(
+        options.get("timezone_id")
+        or os.getenv("XHS_TIMEZONE")
+        or "Asia/Shanghai"
+    ).strip() or None
+    launch_args = _parse_browser_args(
+        options.get("browser_args") or os.getenv("XHS_BROWSER_ARGS", "")
+    )
+
+    return XiaohongshuBrowserSettings(
+        profile_dir=profile_dir,
+        headless=headless_value == "true",
+        executable_path=executable_path,
+        channel=channel,
+        locale=locale,
+        timezone_id=timezone_id,
+        launch_args=launch_args,
+    )
+
+
+def _parse_browser_args(raw_args: Any) -> list[str]:
+    if isinstance(raw_args, list):
+        return [str(arg).strip() for arg in raw_args if str(arg).strip()]
+
+    if not raw_args:
+        return []
+
+    return [part.strip() for part in str(raw_args).split(",") if part.strip()]
+
+
 def _apply_smart_title(page: Any, fallback_title: str | None = None) -> str | None:
     title_input = _find_first_visible_locator(page, TITLE_SELECTORS)
     if title_input is None:
@@ -678,6 +751,18 @@ def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
 
 def _looks_logged_out(page: Any) -> bool:
     try:
-        return page.locator("text=登录").count() > 0 and page.locator("input[type='password']").count() > 0
+        current_url = str(page.url).lower()
+    except Exception:
+        current_url = ""
+
+    if "creator.xiaohongshu.com/login" in current_url or "redirectreason=401" in current_url:
+        return True
+
+    try:
+        if any(page.locator(selector).count() > 0 for selector in LOGGED_IN_SELECTORS):
+            return False
+
+        matched_logged_out_selectors = sum(page.locator(selector).count() > 0 for selector in LOGGED_OUT_SELECTORS)
+        return matched_logged_out_selectors >= 2
     except Exception:
         return False

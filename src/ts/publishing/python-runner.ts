@@ -1,20 +1,10 @@
 import { spawnSync } from "node:child_process";
-import path from "node:path";
 
 import type { PublishIntent, PublishResult } from "./types.js";
+import { buildPythonModuleCommand } from "./python-command.js";
 
 export function buildPublisherCommand(): { command: string; args: string[]; cwd: string; env: NodeJS.ProcessEnv } {
-  const cwd = process.cwd();
-  const pythonPath = path.join(cwd, "src", "python");
-  return {
-    command: process.env.MARKETING_FOX_PUBLISH_PYTHON ?? "python3",
-    args: ["-m", "marketing_fox.publishing.runner"],
-    cwd,
-    env: {
-      ...process.env,
-      PYTHONPATH: process.env.PYTHONPATH ? `${pythonPath}:${process.env.PYTHONPATH}` : pythonPath
-    }
-  };
+  return buildPythonModuleCommand("marketing_fox.publishing.runner");
 }
 
 export function runPublishIntent(intent: PublishIntent): PublishResult {

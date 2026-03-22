@@ -38,6 +38,7 @@ npm run dev
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .[dev]
+python -m playwright install chromium
 marketing-fox-py
 ```
 
@@ -68,6 +69,7 @@ Publishing is Python-first in the current implementation:
 - `小红书` uses browser automation with a persistent local profile.
 - `小红书` note publishing defaults to the `上传图文 -> 文字配图` flow, keeps the default generated preview card, selects one `智能标题`, and selects three suggested `话题` before publish.
 - `微信公众号` and `X` use official API-oriented connectors.
+- The TypeScript bridge now prefers the project virtualenv interpreter automatically, so local and Linux deployments do not silently fall back to a system Python that is missing `playwright`.
 
 Example:
 
@@ -75,9 +77,26 @@ Example:
 npm run dev -- publish xiaohongshu "用 15 个字讲清楚一个内容增长动作"
 ```
 
+### Xiaohongshu Session Bootstrap
+
+First-time login should happen inside the same persistent browser profile that later runs automation:
+
+```bash
+npm run xhs:login
+```
+
+Check whether the saved session is still valid:
+
+```bash
+npm run xhs:check
+```
+
+For Linux servers, keep `XHS_PROFILE_DIR` on durable storage, install Chromium with Playwright, and run the login bootstrap command inside the same desktop session, VNC session, or `Xvfb` display that production automation will reuse.
+
 ## Docs
 
 - [Product Scope](./docs/product-scope.md)
 - [Architecture](./docs/architecture.md)
+- [Publishing Operator Contract](./docs/publishing-operator-contract.md)
 - [Xiaohongshu Login Strategy](./docs/xiaohongshu-login-strategy.md)
 - [Roadmap](./docs/roadmap.md)

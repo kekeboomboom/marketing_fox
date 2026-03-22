@@ -22,6 +22,7 @@ dev = [
 [project.scripts]
 marketing-fox-py = "marketing_fox.main:main"
 marketing-fox-publish = "marketing_fox.publishing.runner:main"
+marketing-fox-xhs-session = "marketing_fox.publishing.xiaohongshu_session:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/python/marketing_fox"]

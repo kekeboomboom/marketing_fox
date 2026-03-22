@@ -1,5 +1,6 @@
 from marketing_fox.publishing.connectors.xiaohongshu_connector import (
     _build_text_image_note_text,
+    _looks_logged_out,
     _resolve_note_image_assets,
 )
 from marketing_fox.publishing.models import DraftArtifact, PublishIntent, RunContext
@@ -48,3 +49,44 @@ def test_xiaohongshu_generates_placeholder_image_when_assets_missing(tmp_path) -
     generated = image_paths[0]
     assert generated.exists()
     assert generated.read_bytes().startswith(b"\x89PNG")
+
+
+class _FakeLocator:
+    def __init__(self, count: int) -> None:
+        self._count = count
+
+    def count(self) -> int:
+        return self._count
+
+
+class _FakePage:
+    def __init__(self, url: str, counts: dict[str, int]) -> None:
+        self.url = url
+        self._counts = counts
+
+    def locator(self, selector: str) -> _FakeLocator:
+        return _FakeLocator(self._counts.get(selector, 0))
+
+
+def test_xiaohongshu_detects_logged_out_login_page() -> None:
+    page = _FakePage(
+        "https://creator.xiaohongshu.com/login?redirectReason=401",
+        {
+            "input[placeholder='手机号']": 1,
+            "input[placeholder='验证码']": 1,
+            "text=短信登录": 1,
+        },
+    )
+
+    assert _looks_logged_out(page) is True
+
+
+def test_xiaohongshu_logged_out_detector_does_not_flag_publish_page() -> None:
+    page = _FakePage(
+        "https://creator.xiaohongshu.com/publish/publish",
+        {
+            "button:has-text('上传图文')": 1,
+        },
+    )
+
+    assert _looks_logged_out(page) is False

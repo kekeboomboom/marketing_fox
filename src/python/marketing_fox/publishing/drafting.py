@@ -40,6 +40,18 @@ def _generate_xiaohongshu_draft(intent: PublishIntent) -> DraftArtifact:
     keywords = _extract_keywords(intent.source_idea)
     title = _condense_title(intent.source_idea, 20)
     tag_list = [f"#{keyword}" for keyword in keywords[:4]]
+    preserve_source_text = bool(intent.options.get("preserve_source_text"))
+    if preserve_source_text:
+        return DraftArtifact(
+            platform="xiaohongshu",
+            title=title,
+            body=intent.source_idea.strip(),
+            tags=tag_list,
+            cover_hint=f"用大字突出“{keywords[0]}”，副标题保留古诗的安静氛围。",
+            image_prompt=f"Create a clean Xiaohongshu-style cover about {keywords[0]} with quiet, poetic typography.",
+            metadata={"source_keywords": keywords, "preserve_source_text": True},
+        )
+
     body_lines = [
         f"今天想分享一个关于“{keywords[0]}”的小想法。",
         f"核心观点：{intent.source_idea.strip()}。",

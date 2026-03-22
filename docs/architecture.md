@@ -51,7 +51,11 @@ This layer should answer:
 - Secrets stay in environment variables and are never embedded in code.
 - New platform support should start with docs and config contracts before API code.
 - Keep the system runnable locally without external infrastructure in the first phase.
+- Publish requests should be program-first: the formal repository publish command is the default path, while direct browser interaction is only a debugging aid to repair that path.
 - `小红书` uses browser automation rather than a public creator-post API in v1.
 - `小红书` server deployment should preserve a persistent browser profile and treat re-login as an operator workflow instead of an automatic retry path.
+- `小红书` should expose explicit session bootstrap and session-check commands so Linux operators can prepare and validate the browser profile without manually driving each publish run.
 - The default `小红书` note-publishing path is the `上传图文 -> 文字配图` browser flow, not direct image upload.
 - In the default `小红书` flow, the system should generate the image from text, keep the default preview card, apply one suggested `智能标题`, select three suggested `话题`, and then publish unless the operator explicitly asks to stop earlier.
+
+See [Publishing Operator Contract](./publishing-operator-contract.md) for the interaction-level rules that sit above these runtime constraints.

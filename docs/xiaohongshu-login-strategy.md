@@ -16,7 +16,7 @@ Use the common industry approach:
 - Reuse the same browser profile for every later draft or publish action
 - Detect session loss before publish and fall back to a manual re-login flow
 
-This matches the current implementation in the Python connector, which already uses Playwright persistent context with `user_data_dir`.
+This matches the current implementation in the Python connector, which already uses Playwright persistent context with `user_data_dir`. The repo now also includes explicit session bootstrap and session-check commands for the same profile.
 
 ## Why This Approach
 
@@ -137,6 +137,12 @@ Optional deployment flags may include:
 
 ```text
 XHS_HEADLESS=false
+XHS_LOGIN_TIMEOUT_MS=300000
+XHS_LOCALE=zh-CN
+XHS_TIMEZONE=Asia/Shanghai
+XHS_BROWSER_CHANNEL=
+XHS_BROWSER_EXECUTABLE_PATH=
+XHS_BROWSER_ARGS=
 ```
 
 During login bootstrap, use non-headless mode. After the session is proven stable, headless mode can be tested, but non-headless or virtual-display execution is often easier to debug on this platform.
@@ -184,8 +190,13 @@ The current connector already follows the intended core pattern:
 - fail with `login_required` if the session is missing
 
 Future implementation work should add:
+The current repo now includes:
 
-- a dedicated login bootstrap command
-- a stronger logged-out detector
+- a dedicated login bootstrap command via `npm run xhs:login`
+- a session-check command via `npm run xhs:check`
+- a stronger logged-out detector that recognizes login redirects and SMS-login forms
+
+Remaining follow-up work could add:
+
 - operator-facing remediation guidance when re-login is required
 - deployment examples for Docker and systemd
