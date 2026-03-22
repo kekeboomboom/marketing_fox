@@ -52,3 +52,4 @@ This layer should answer:
 - New platform support should start with docs and config contracts before API code.
 - Keep the system runnable locally without external infrastructure in the first phase.
 - `小红书` uses browser automation rather than a public creator-post API in v1.
+- `小红书` server deployment should preserve a persistent browser profile and treat re-login as an operator workflow instead of an automatic retry path.

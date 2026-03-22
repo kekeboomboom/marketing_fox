@@ -50,6 +50,7 @@ Build a personal marketing agent that helps creators and operators grow audience
 ## Publishing Delivery Notes
 
 - `小红书` publishing is implemented via local browser automation with a persistent user session.
+- `小红书` Linux deployment should reuse a persistent browser profile instead of relying on a cookie-only login shortcut.
 - `微信公众号` publishing follows the draft-and-publish article model.
 - `X` publishing targets single-post creation first.
 - A short idea is treated as source input and expanded into platform-native draft content before publish.
