@@ -6,6 +6,7 @@
   "description": "Personal marketing agent for X, XiaoHongShu, and WeChat Official Accounts.",
   "scripts": {
     "dev": "tsx src/ts/index.ts",
+    "api": "tsx src/ts/api-server.ts",
     "xhs:login": "tsx src/ts/index.ts xhs-login",
     "xhs:check": "tsx src/ts/index.ts xhs-check",
     "check": "tsc --noEmit",
