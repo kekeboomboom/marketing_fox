@@ -25,6 +25,12 @@ Use this order every time:
 
 Manual page interaction is not the normal publish path. It is only a debugging fallback while repairing the deterministic program path.
 
+In the current repo, the operator-facing commands are:
+
+- `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`
+- `npm run xhs:check`
+- `npm run xhs:login`
+
 ## Request Handling Contract
 
 ### If the operator provides final content
@@ -87,6 +93,8 @@ Fallbacks must still serve the program-first model:
 3. Invalid runtime defaults: change the code so the formal command behaves correctly.
 4. Expired browser session: run the formal login bootstrap flow, then return to publish.
 5. Page/UI drift: debug selectors and flow, then return to the formal program.
+
+Before moving into manual debugging, inspect the current run artifacts. The publish runner writes screenshots and related evidence under `.artifacts/publishing/<platform>/...`, and Xiaohongshu session flows write evidence under `.artifacts/xiaohongshu-session/...`.
 
 ## Linux Server Expectations
 
