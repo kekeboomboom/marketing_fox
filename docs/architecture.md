@@ -25,9 +25,9 @@ This layer should answer:
 
 ### Service Layer
 
-- future HTTP API entry point for operator-facing and agent-facing access
-- should expose publish, session, job-status, and capability endpoints
-- should call the same publishing core used by the existing CLI
+- `src/ts/api-server.ts`: HTTP API service entry point (`npm run api`) for operator-facing and agent-facing access
+- exposes publish, session, job-status, and capability endpoints
+- calls the same publishing core used by the existing CLI
 
 This layer should answer:
 
@@ -71,4 +71,4 @@ This layer should answer:
 - In the default `小红书` flow, the system should generate the image from text, keep the default preview card, apply one suggested `智能标题`, select three suggested `话题`, and then publish unless the operator explicitly asks to stop earlier.
 
 See [Publishing Operator Contract](./publishing-operator-contract.md) for the interaction-level rules that sit above these runtime constraints.
-See [Service API Contract](./service-api-contract.md) for the planned HTTP boundary that should sit in front of the current publish runner.
+See [Service API Contract](./service-api-contract.md) for the HTTP boundary that sits in front of the current publish runner.

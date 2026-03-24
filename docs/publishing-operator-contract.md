@@ -30,6 +30,7 @@ In the current repo, the operator-facing commands are:
 - `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`
 - `npm run xhs:check`
 - `npm run xhs:login`
+- `npm run api` (HTTP service; requires `MARKETING_FOX_API_TOKEN`, see `docs/service-api-contract.md`)
 
 ## Request Handling Contract
 
