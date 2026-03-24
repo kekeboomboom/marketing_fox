@@ -26,7 +26,7 @@ The long-term product may expand to YouTube, TikTok, Facebook, Bilibili, Douyin,
 ## Operator Defaults
 
 - When the user asks to publish content, the first priority is always the repository's formal publishing program. Do not default to manual browser clicking or ad hoc AI-operated page interactions when the program path exists or should exist.
-- The current formal publishing entry points are `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`, `npm run xhs:check`, and `npm run xhs:login`.
+- The current formal operator entry points are `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`, `npm run xhs:check`, `npm run xhs:login`, and `npm run api` (HTTP service; requires `MARKETING_FOX_API_TOKEN`).
 - Treat direct browser interaction as a debugging aid for repairing the formal publish path, not as the normal way to complete a publish request.
 - If the user provides final publish-ready content, preserve the original content by default instead of rewriting it.
 - If the user asks to "publish" without extra qualifiers, treat it as a real publish request. Only stop at `prepare` or `draft` when the user explicitly asks for a dry run, review step, or stop-before-publish flow.

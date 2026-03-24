@@ -56,11 +56,14 @@ Versioning rule:
 
 The initial service model should use simple operator-focused authentication.
 
-Recommended v1 approach:
+Current implementation:
 
 - bearer token authentication for server-to-server and automation clients
-- cookie-backed operator session for the Web console, backed by the same user identity model
-- one initial admin/operator role
+
+TODO (not yet implemented):
+
+- cookie-backed operator session for a Web console
+- more granular roles and permissions beyond a single operator token
 
 Request header:
 
