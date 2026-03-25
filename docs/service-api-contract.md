@@ -71,6 +71,11 @@ Request header:
 Authorization: Bearer <token>
 ```
 
+Route rule:
+
+- `GET /api/v1/health` is intentionally unauthenticated for deploy and uptime checks
+- the other documented `/api/v1/*` routes currently require the bearer token
+
 Initial role model:
 
 - `operator`: can create publish jobs, check session status, run login bootstrap, and read jobs
@@ -515,6 +520,7 @@ Examples of stable application error codes:
 - `browser_unavailable`
 - `platform_unavailable`
 - `job_not_found`
+- `job_interrupted`
 
 ## Idempotency
 
