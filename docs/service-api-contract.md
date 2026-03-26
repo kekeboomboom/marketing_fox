@@ -59,6 +59,7 @@ The initial service model should use simple operator-focused authentication.
 Current implementation:
 
 - bearer token authentication for server-to-server and automation clients
+- `GET /api/v1/health` is intentionally unauthenticated so local probes and deploy checks can run before credentials are wired in
 
 TODO (not yet implemented):
 
@@ -545,6 +546,11 @@ Recommended v1 shape:
 - clients poll `GET /jobs/{id}` for completion
 
 The first worker implementation can be simple. It does not need a distributed queue before the product actually needs one.
+
+Current implementation detail:
+
+- job records are stored as JSON files under `MARKETING_FOX_DATA_DIR/jobs`
+- service startup recovers any `queued` or `running` jobs by marking them failed with `code: "job_interrupted"`
 
 ## Observability
 
