@@ -14,13 +14,19 @@ export function loadServiceConfig(
   const host = env.MARKETING_FOX_API_HOST?.trim() || "127.0.0.1";
   const port = parsePort(env.MARKETING_FOX_API_PORT);
   const dataDir = path.resolve(cwd, env.MARKETING_FOX_DATA_DIR?.trim() || ".local/service-data");
+  const artifactsDir = path.resolve(cwd, env.MARKETING_FOX_ARTIFACTS_DIR?.trim() || ".artifacts");
   const version = env.npm_package_version?.trim() || "0.1.0";
+  const operatorPassword = env.MARKETING_FOX_OPERATOR_PASSWORD?.trim() || token;
+  const operatorCookieName = env.MARKETING_FOX_OPERATOR_COOKIE_NAME?.trim() || "marketing_fox_operator_session";
 
   return {
     host,
     port,
     token,
+    operatorPassword,
+    operatorCookieName,
     dataDir,
+    artifactsDir,
     logTailLimit: 20,
     version
   };

@@ -12,6 +12,7 @@ __pycache__/
 *.pyo
 
 .env
+.env.test
 .env.local
 .env.*.local
 
@@ -22,4 +23,9 @@ Thumbs.db
 .vscode/
 
 *.log
+*.tsbuildinfo
 .artifacts/
+.next/
+.local/
+runtime/
+output/

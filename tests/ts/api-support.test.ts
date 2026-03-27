@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { extractBearerToken, hasBearerToken } from "../../src/ts/api/auth.js";
+import { authenticateActor, extractBearerToken, hasBearerToken } from "../../src/ts/api/auth.js";
 import { JobRunner } from "../../src/ts/api/job-runner.js";
 import { JobStore } from "../../src/ts/api/job-store.js";
 import type { ServiceAdapters } from "../../src/ts/api/job-runner.js";
@@ -17,13 +17,35 @@ test("auth helper accepts only the configured bearer token", () => {
   assert.equal(extractBearerToken({ authorization: "Basic abc123" }), null);
 });
 
+test("auth helper supports bearer and cookie session actor resolution", () => {
+  const bearerActor = authenticateActor({ authorization: "Bearer token-a" }, {
+    bearerToken: "token-a",
+    operatorPassword: "password-a",
+    operatorCookieName: "marketing_fox_operator_session"
+  });
+  assert.equal(bearerActor?.subject, "bearer_token");
+
+  const cookieActor = authenticateActor({ cookie: "marketing_fox_operator_session=password-a" }, {
+    bearerToken: "token-a",
+    operatorPassword: "password-a",
+    operatorCookieName: "marketing_fox_operator_session"
+  });
+  assert.equal(cookieActor?.subject, "cookie_session");
+});
+
 test("file-backed job store recovers interrupted jobs after restart", () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "marketing-fox-job-store-"));
   const firstStore = new JobStore(dataDir);
-  const job = firstStore.createJob("publish", {
-    platform: "x",
-    mode: "publish"
-  });
+  const job = firstStore.createJob(
+    "publish",
+    {
+      platform: "x",
+      mode: "publish"
+    },
+    {
+      lockKey: "xhs_profile_default"
+    }
+  );
   firstStore.setRunning(job.id);
 
   const secondStore = new JobStore(dataDir);
@@ -32,6 +54,7 @@ test("file-backed job store recovers interrupted jobs after restart", () => {
 
   assert.equal(recoveredJob?.status, "failed");
   assert.equal(recoveredJob?.error?.code, "job_interrupted");
+  assert.equal(secondStore.findActiveJobByLock("xhs_profile_default"), null);
 });
 
 test("job runner persists screenshot artifacts and trimmed logs", async () => {
@@ -93,6 +116,7 @@ test("job runner persists screenshot artifacts and trimmed logs", async () => {
           ".artifacts/publishing/final-b.png"
         ]
       );
+      assert.equal(currentJob.artifacts.every((artifact) => artifact.id.startsWith("artifact_")), true);
       assert.deepEqual(currentJob.logs_tail, ["publish-2", "publish-3", "publish-4"]);
       return;
     }

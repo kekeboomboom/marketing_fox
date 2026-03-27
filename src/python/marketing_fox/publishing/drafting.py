@@ -40,7 +40,8 @@ def _generate_xiaohongshu_draft(intent: PublishIntent) -> DraftArtifact:
     keywords = _extract_keywords(intent.source_idea)
     title = _condense_title(intent.source_idea, 20)
     tag_list = [f"#{keyword}" for keyword in keywords[:4]]
-    preserve_source_text = bool(intent.options.get("preserve_source_text"))
+    preserve_option = intent.options.get("preserve_source_text")
+    preserve_source_text = intent.mode != "prepare" if preserve_option is None else bool(preserve_option)
     if preserve_source_text:
         return DraftArtifact(
             platform="xiaohongshu",

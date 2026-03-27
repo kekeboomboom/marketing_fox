@@ -112,6 +112,42 @@ npm run api
 
 The service listens on `MARKETING_FOX_API_HOST` and `MARKETING_FOX_API_PORT` and persists job state under `MARKETING_FOX_DATA_DIR`.
 
+### Shared Test Deployment
+
+The shared `test` server deployment uses Docker Compose behind Nginx.
+
+Reserved test allocations for this repo:
+
+- public domain: `marketingfox-test.keboom.ai`
+- frontend localhost port: `20000`
+- backend localhost port: `20001`
+- recommended `APP_DIR`: `/srv/marketing_fox-test`
+- compose stack name: `marketing_fox-test`
+
+The repository now includes:
+
+- [compose.test.yml](./compose.test.yml)
+- [Dockerfile.web](./Dockerfile.web)
+- [Dockerfile.api](./Dockerfile.api)
+- [.github/workflows/publish-test-images.yml](./.github/workflows/publish-test-images.yml)
+- [docs/OPERATIONS-test.md](./docs/OPERATIONS-test.md)
+- [deploy/nginx/marketing_fox-test.conf.example](./deploy/nginx/marketing_fox-test.conf.example)
+
+Use a dedicated test env file:
+
+```bash
+cp .env.test.example .env.test
+docker compose --env-file .env.test -f compose.test.yml pull
+docker compose --env-file .env.test -f compose.test.yml up -d
+```
+
+The shared host should use CI-built images from GHCR. The repository includes a GitHub Actions workflow that publishes `marketing-fox-api` and `marketing-fox-web` images for the `test` tag on pushes to `main` and on manual dispatch.
+
+On the shared host, keep public traffic on Nginx only:
+
+- `/` proxies to `127.0.0.1:20000`
+- `/api/` proxies to `127.0.0.1:20001`
+
 ### API Call Examples
 
 Health check:
@@ -193,8 +229,11 @@ export MARKETING_FOX_API_PORT=3001
 export MARKETING_FOX_API_TOKEN=change-me
 export MARKETING_FOX_DATA_DIR=/data/marketing_fox/service-data
 export XHS_PROFILE_DIR=/data/marketing_fox/xhs-profile
+export XHS_BROWSER_CACHE_DIR=/data/marketing_fox/ms-playwright
 export XHS_HEADLESS=false
 ```
+
+For server deployments, prefer an explicit `XHS_BROWSER_CACHE_DIR` rather than relying on an inherited `PLAYWRIGHT_BROWSERS_PATH`. The runtime now treats Cursor-style sandbox cache paths as non-canonical and falls back to the standard OS cache directory unless you set an explicit server path.
 
 Recommended startup sequence:
 
@@ -247,6 +286,7 @@ The first Web page should support:
 
 - [Product Scope](./docs/product-scope.md)
 - [Architecture](./docs/architecture.md)
+- [Shared Test Deployment](./docs/OPERATIONS-test.md)
 - [Publishing Operator Contract](./docs/publishing-operator-contract.md)
 - [Xiaohongshu Login Strategy](./docs/xiaohongshu-login-strategy.md)
 - [Roadmap](./docs/roadmap.md)

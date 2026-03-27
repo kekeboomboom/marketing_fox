@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["es2022"],
+    "types": ["node"],
+    "jsx": "preserve"
+  },
+  "include": [
+    "next.config.ts",
+    "src/lib/**/*.ts",
+    "src/ts/**/*.ts",
+    "tests/ts/**/*.ts"
+  ]
+}

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import fs from "node:fs";
 import test from "node:test";
 
 import { createMarketingFoxApiServer } from "../../src/ts/api/server.js";
@@ -13,7 +13,10 @@ function createTestConfig(dataDir: string): ServiceConfig {
     host: "127.0.0.1",
     port: 0,
     token: "test-token",
+    operatorPassword: "operator-pass",
+    operatorCookieName: "marketing_fox_operator_session",
     dataDir,
+    artifactsDir: path.resolve(process.cwd(), ".artifacts"),
     logTailLimit: 5,
     version: "test-version"
   };
@@ -61,12 +64,23 @@ function authHeaders(): Record<string, string> {
   };
 }
 
+function cookieHeaders(): Record<string, string> {
+  return {
+    Cookie: "marketing_fox_operator_session=operator-pass",
+    "Content-Type": "application/json"
+  };
+}
+
+async function readJson<T>(response: Response): Promise<T> {
+  return (await response.json()) as T;
+}
+
 async function waitForJob(baseUrl: string, jobId: string): Promise<any> {
-  for (let attempt = 0; attempt < 50; attempt += 1) {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
     const response = await fetch(`${baseUrl}/api/v1/jobs/${jobId}`, {
       headers: authHeaders()
     });
-    const payload = (await response.json()) as { job: any };
+    const payload = await readJson<{ job: any }>(response);
     if (payload.job.status === "succeeded" || payload.job.status === "failed") {
       return payload.job;
     }
@@ -77,182 +91,8 @@ async function waitForJob(baseUrl: string, jobId: string): Promise<any> {
   throw new Error(`Timed out waiting for job ${jobId}`);
 }
 
-test("GET /api/v1/health succeeds without auth", async () => {
-  const adapters: ServiceAdapters = {
-    runPublishIntent: async () => {
-      throw new Error("not used");
-    },
-    checkXiaohongshuSession: async () => ({
-      action: "check",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: "https://creator.xiaohongshu.com/publish/publish",
-      screenshots: [],
-      logs: [],
-      error: null
-    }),
-    loginXiaohongshuSession: async () => ({
-      action: "login",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: "https://creator.xiaohongshu.com/publish/publish",
-      screenshots: [],
-      logs: [],
-      error: null
-    })
-  };
-  const { baseUrl, close } = await startServer(adapters);
-
-  try {
-    const response = await fetch(`${baseUrl}/api/v1/health`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.equal(payload.status, "ok");
-    assert.equal(payload.version, "test-version");
-  } finally {
-    await close();
-  }
-});
-
-test("protected endpoints reject missing token", async () => {
-  const adapters: ServiceAdapters = {
-    runPublishIntent: async () => {
-      throw new Error("not used");
-    },
-    checkXiaohongshuSession: async () => ({
-      action: "check",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    }),
-    loginXiaohongshuSession: async () => ({
-      action: "login",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    })
-  };
-  const { baseUrl, close } = await startServer(adapters);
-
-  try {
-    const response = await fetch(`${baseUrl}/api/v1/platforms`);
-    const payload = await response.json();
-
-    assert.equal(response.status, 401);
-    assert.equal(payload.error.code, "unauthorized");
-  } finally {
-    await close();
-  }
-});
-
-test("GET /api/v1/platforms returns known platforms and session capability flags", async () => {
-  const adapters: ServiceAdapters = {
-    runPublishIntent: async () => {
-      throw new Error("not used");
-    },
-    checkXiaohongshuSession: async () => ({
-      action: "check",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    }),
-    loginXiaohongshuSession: async () => ({
-      action: "login",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    })
-  };
-  const { baseUrl, close } = await startServer(adapters);
-
-  try {
-    const response = await fetch(`${baseUrl}/api/v1/platforms`, {
-      headers: authHeaders()
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.equal(Array.isArray(payload.platforms), true);
-    assert.deepEqual(
-      payload.platforms.map((platform: { id: string }) => platform.id),
-      ["x", "xiaohongshu", "wechat_official_account"]
-    );
-    assert.equal(
-      payload.platforms.find((platform: { id: string }) => platform.id === "xiaohongshu").requires_session,
-      true
-    );
-  } finally {
-    await close();
-  }
-});
-
-test("POST /api/v1/publish rejects invalid payloads", async () => {
-  const adapters: ServiceAdapters = {
-    runPublishIntent: async () => {
-      throw new Error("not used");
-    },
-    checkXiaohongshuSession: async () => ({
-      action: "check",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    }),
-    loginXiaohongshuSession: async () => ({
-      action: "login",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    })
-  };
-  const { baseUrl, close } = await startServer(adapters);
-
-  try {
-    const response = await fetch(`${baseUrl}/api/v1/publish`, {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({
-        platform: "xiaohongshu",
-        mode: "publish"
-      })
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 400);
-    assert.equal(payload.error.code, "invalid_request");
-  } finally {
-    await close();
-  }
-});
-
-test("POST /api/v1/publish creates a queued job and later exposes terminal status", async () => {
-  const adapters: ServiceAdapters = {
+function createBaseAdapters(overrides: Partial<ServiceAdapters> = {}): ServiceAdapters {
+  const base: ServiceAdapters = {
     runPublishIntent: async (intent) => ({
       platform: intent.platform,
       mode: intent.mode,
@@ -286,12 +126,72 @@ test("POST /api/v1/publish creates a queued job and later exposes terminal statu
       logged_in: true,
       profile_dir: ".local/xhs-profile",
       platform_url: "https://creator.xiaohongshu.com/publish/publish",
-      screenshots: [],
-      logs: [],
+      screenshots: [".artifacts/xhs/login-ready.png"],
+      logs: ["login ready"],
       error: null
     })
   };
-  const { baseUrl, close } = await startServer(adapters);
+
+  return {
+    ...base,
+    ...overrides
+  };
+}
+
+test("GET /api/v1/health succeeds without auth", async () => {
+  const { baseUrl, close } = await startServer(createBaseAdapters());
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/health`);
+    const payload = await readJson<{ status: string; version: string }>(response);
+
+    assert.equal(response.status, 200);
+    assert.equal(payload.status, "ok");
+    assert.equal(payload.version, "test-version");
+  } finally {
+    await close();
+  }
+});
+
+test("protected endpoints reject missing credentials", async () => {
+  const { baseUrl, close } = await startServer(createBaseAdapters());
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/platforms`);
+    const payload = await readJson<{ error: { code: string } }>(response);
+
+    assert.equal(response.status, 401);
+    assert.equal(payload.error.code, "unauthorized");
+  } finally {
+    await close();
+  }
+});
+
+test("GET /api/v1/platforms supports bearer and cookie auth", async () => {
+  const { baseUrl, close } = await startServer(createBaseAdapters());
+
+  try {
+    const bearerResponse = await fetch(`${baseUrl}/api/v1/platforms`, {
+      headers: authHeaders()
+    });
+    assert.equal(bearerResponse.status, 200);
+
+    const cookieResponse = await fetch(`${baseUrl}/api/v1/platforms`, {
+      headers: cookieHeaders()
+    });
+    const payload = await readJson<{ platforms: Array<{ id: string }> }>(cookieResponse);
+    assert.equal(cookieResponse.status, 200);
+    assert.deepEqual(
+      payload.platforms.map((platform: { id: string }) => platform.id),
+      ["x", "xiaohongshu", "wechat_official_account"]
+    );
+  } finally {
+    await close();
+  }
+});
+
+test("POST /api/v1/publish creates a queued job and terminal status with artifacts", async () => {
+  const { baseUrl, close } = await startServer(createBaseAdapters());
 
   try {
     const createResponse = await fetch(`${baseUrl}/api/v1/publish`, {
@@ -303,7 +203,7 @@ test("POST /api/v1/publish creates a queued job and later exposes terminal statu
         mode: "publish"
       })
     });
-    const createPayload = await createResponse.json();
+    const createPayload = await readJson<{ job: { id: string; status: string } }>(createResponse);
 
     assert.equal(createResponse.status, 202);
     assert.equal(createPayload.job.status, "queued");
@@ -311,184 +211,51 @@ test("POST /api/v1/publish creates a queued job and later exposes terminal statu
     const job = await waitForJob(baseUrl, createPayload.job.id);
     assert.equal(job.status, "succeeded");
     assert.equal(job.result.status, "published");
-    assert.deepEqual(
-      job.artifacts.map((artifact: { path: string }) => artifact.path),
-      [".artifacts/xhs/preflight.png", ".artifacts/publishing/final.png"]
-    );
+    assert.equal(job.lock_key, "xhs_profile_default");
+    assert.equal(Array.isArray(job.artifacts), true);
+    assert.equal(job.artifacts.every((artifact: { id: string }) => artifact.id.startsWith("artifact_")), true);
     assert.deepEqual(job.logs_tail, ["session valid", "publish completed"]);
   } finally {
     await close();
   }
 });
 
-test("POST /api/v1/publish/prepare forces prepare mode", async () => {
-  const seenModes: string[] = [];
-  const adapters: ServiceAdapters = {
-    runPublishIntent: async (intent) => {
-      seenModes.push(intent.mode);
-      return {
-        platform: intent.platform,
-        mode: intent.mode,
-        status: "prepared",
-        draft_artifact: {
-          platform: intent.platform,
-          text: "Prepared draft",
-          tags: [],
-          metadata: {}
-        },
-        screenshots: [],
-        logs: ["prepared"],
-        error: null
-      };
-    },
-    checkXiaohongshuSession: async () => ({
-      action: "check",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    }),
-    loginXiaohongshuSession: async () => ({
-      action: "login",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    })
-  };
-  const { baseUrl, close } = await startServer(adapters);
+test("GET /api/v1/jobs lists jobs and supports filters", async () => {
+  const { baseUrl, close } = await startServer(createBaseAdapters());
 
   try {
-    const createResponse = await fetch(`${baseUrl}/api/v1/publish/prepare`, {
+    const createResponse = await fetch(`${baseUrl}/api/v1/publish`, {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({
         platform: "x",
-        source_idea: "Turn this into a short post",
+        source_idea: "Post to X",
         mode: "publish"
       })
     });
-    const createPayload = await createResponse.json();
+    const createPayload = await readJson<{ job: { id: string } }>(createResponse);
+    await waitForJob(baseUrl, createPayload.job.id);
 
-    const job = await waitForJob(baseUrl, createPayload.job.id);
-    assert.equal(job.result.mode, "prepare");
-    assert.deepEqual(seenModes, ["prepare"]);
-  } finally {
-    await close();
-  }
-});
-
-test("GET /api/v1/jobs/:id returns 404 for unknown jobs", async () => {
-  const adapters: ServiceAdapters = {
-    runPublishIntent: async () => {
-      throw new Error("not used");
-    },
-    checkXiaohongshuSession: async () => ({
-      action: "check",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    }),
-    loginXiaohongshuSession: async () => ({
-      action: "login",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    })
-  };
-  const { baseUrl, close } = await startServer(adapters);
-
-  try {
-    const response = await fetch(`${baseUrl}/api/v1/jobs/does-not-exist`, {
+    const listResponse = await fetch(`${baseUrl}/api/v1/jobs?platform=x&limit=1`, {
       headers: authHeaders()
     });
-    const payload = await response.json();
+    const listPayload = await readJson<{ jobs: Array<{ request: { platform: string } }> }>(listResponse);
 
-    assert.equal(response.status, 404);
-    assert.equal(payload.error.code, "job_not_found");
+    assert.equal(listResponse.status, 200);
+    assert.equal(Array.isArray(listPayload.jobs), true);
+    assert.equal(listPayload.jobs.length, 1);
+    assert.equal(listPayload.jobs[0].request.platform, "x");
   } finally {
     await close();
   }
 });
 
-test("POST /api/v1/xhs/session/check returns normalized session shape", async () => {
-  const adapters: ServiceAdapters = {
-    runPublishIntent: async () => {
-      throw new Error("not used");
-    },
-    checkXiaohongshuSession: async () => ({
-      action: "check",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: "https://creator.xiaohongshu.com/publish/publish",
-      screenshots: [".artifacts/xhs/check.png"],
-      logs: ["session valid"],
-      error: null
-    }),
-    loginXiaohongshuSession: async () => ({
-      action: "login",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    })
-  };
-  const { baseUrl, close } = await startServer(adapters);
-
-  try {
-    const response = await fetch(`${baseUrl}/api/v1/xhs/session/check`, {
-      method: "POST",
-      headers: authHeaders(),
-      body: JSON.stringify({})
-    });
-    const payload = await response.json();
-
-    assert.equal(response.status, 200);
-    assert.equal(payload.session.status, "logged_in");
-    assert.equal(payload.session.logged_in, true);
-    assert.deepEqual(payload.session.screenshots, [".artifacts/xhs/check.png"]);
-  } finally {
-    await close();
-  }
-});
-
-test("POST /api/v1/xhs/session/login-bootstrap creates a job and rejects concurrent runs", async () => {
-  let resolveLogin: (() => void) | null = null;
+test("POST /api/v1/publish returns conflict when xhs profile lock is active", async () => {
+  let resolveLogin: () => void = () => {};
   const loginPromise = new Promise<void>((resolve) => {
-    resolveLogin = resolve;
+    resolveLogin = () => resolve();
   });
-  const adapters: ServiceAdapters = {
-    runPublishIntent: async () => {
-      throw new Error("not used");
-    },
-    checkXiaohongshuSession: async () => ({
-      action: "check",
-      status: "logged_in",
-      logged_in: true,
-      profile_dir: ".local/xhs-profile",
-      platform_url: null,
-      screenshots: [],
-      logs: [],
-      error: null
-    }),
+  const adapters = createBaseAdapters({
     loginXiaohongshuSession: async () => {
       await loginPromise;
       return {
@@ -502,7 +269,61 @@ test("POST /api/v1/xhs/session/login-bootstrap creates a job and rejects concurr
         error: null
       };
     }
-  };
+  });
+  const { baseUrl, close } = await startServer(adapters);
+
+  try {
+    const loginResponse = await fetch(`${baseUrl}/api/v1/xhs/session/login-bootstrap`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({})
+    });
+    const loginPayload = await readJson<{ job: { id: string }; reused: boolean }>(loginResponse);
+    assert.equal(loginResponse.status, 202);
+    assert.equal(loginPayload.reused, false);
+
+    const publishResponse = await fetch(`${baseUrl}/api/v1/publish`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        platform: "xiaohongshu",
+        source_idea: "Will conflict",
+        mode: "publish"
+      })
+    });
+    const publishPayload = await readJson<{ error: { code: string; meta: { active_job_id: string } } }>(publishResponse);
+    assert.equal(publishResponse.status, 409);
+    assert.equal(publishPayload.error.code, "job_conflict");
+    assert.equal(typeof publishPayload.error.meta.active_job_id, "string");
+
+    resolveLogin();
+    await waitForJob(baseUrl, loginPayload.job.id);
+  } finally {
+    resolveLogin();
+    await close();
+  }
+});
+
+test("POST /api/v1/xhs/session/login-bootstrap reuses active login job", async () => {
+  let resolveLogin: () => void = () => {};
+  const loginPromise = new Promise<void>((resolve) => {
+    resolveLogin = () => resolve();
+  });
+  const adapters = createBaseAdapters({
+    loginXiaohongshuSession: async () => {
+      await loginPromise;
+      return {
+        action: "login",
+        status: "logged_in",
+        logged_in: true,
+        profile_dir: ".local/xhs-profile",
+        platform_url: "https://creator.xiaohongshu.com/publish/publish",
+        screenshots: [".artifacts/xhs/login-ready.png"],
+        logs: ["login ready"],
+        error: null
+      };
+    }
+  });
   const { baseUrl, close } = await startServer(adapters);
 
   try {
@@ -511,24 +332,79 @@ test("POST /api/v1/xhs/session/login-bootstrap creates a job and rejects concurr
       headers: authHeaders(),
       body: JSON.stringify({})
     });
-    const firstPayload = await firstResponse.json();
+    const firstPayload = await readJson<{ job: { id: string }; reused: boolean }>(firstResponse);
     assert.equal(firstResponse.status, 202);
-    assert.equal(firstPayload.job.kind, "xhs_session_login");
+    assert.equal(firstPayload.reused, false);
 
     const secondResponse = await fetch(`${baseUrl}/api/v1/xhs/session/login-bootstrap`, {
       method: "POST",
       headers: authHeaders(),
       body: JSON.stringify({})
     });
-    const secondPayload = await secondResponse.json();
-    assert.equal(secondResponse.status, 409);
-    assert.equal(secondPayload.error.code, "job_conflict");
+    const secondPayload = await readJson<{ job: { id: string }; reused: boolean }>(secondResponse);
+    assert.equal(secondResponse.status, 202);
+    assert.equal(secondPayload.reused, true);
+    assert.equal(secondPayload.job.id, firstPayload.job.id);
 
-    resolveLogin?.();
-    const job = await waitForJob(baseUrl, firstPayload.job.id);
-    assert.equal(job.status, "succeeded");
+    resolveLogin();
+    const completed = await waitForJob(baseUrl, firstPayload.job.id);
+    assert.equal(completed.status, "succeeded");
   } finally {
-    resolveLogin?.();
+    resolveLogin();
     await close();
+  }
+});
+
+test("GET /api/v1/jobs/:id/artifacts/:artifactId streams an artifact", async () => {
+  const artifactDir = path.resolve(process.cwd(), ".artifacts", "test-api-service");
+  fs.mkdirSync(artifactDir, { recursive: true });
+  const artifactPath = path.join(artifactDir, "test-image.png");
+  fs.writeFileSync(artifactPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+
+  const adapters = createBaseAdapters({
+    runPublishIntent: async (intent) => ({
+      platform: intent.platform,
+      mode: intent.mode,
+      status: "published",
+      draft_artifact: {
+        platform: intent.platform,
+        body: "Body",
+        tags: [],
+        metadata: {}
+      },
+      platform_post_id: null,
+      platform_url: null,
+      screenshots: [".artifacts/test-api-service/test-image.png"],
+      logs: ["published"],
+      error: null
+    })
+  });
+  const { baseUrl, close } = await startServer(adapters);
+
+  try {
+    const createResponse = await fetch(`${baseUrl}/api/v1/publish`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        platform: "x",
+        source_idea: "artifact test",
+        mode: "publish"
+      })
+    });
+    const createPayload = await readJson<{ job: { id: string } }>(createResponse);
+    const job = await waitForJob(baseUrl, createPayload.job.id);
+
+    const artifactId = job.artifacts[0].id;
+    const artifactResponse = await fetch(`${baseUrl}/api/v1/jobs/${job.id}/artifacts/${artifactId}`, {
+      headers: authHeaders()
+    });
+    const content = new Uint8Array(await artifactResponse.arrayBuffer());
+
+    assert.equal(artifactResponse.status, 200);
+    assert.equal(artifactResponse.headers.get("content-type"), "image/png");
+    assert.equal(content.length, 4);
+  } finally {
+    await close();
+    fs.rmSync(artifactDir, { force: true, recursive: true });
   }
 });

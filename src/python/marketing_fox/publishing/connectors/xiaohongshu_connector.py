@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import os
 import struct
+import sys
 import zlib
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator, Mapping
 
 from ..models import DraftArtifact, PublishIntent, PublishResult, RunContext
 from .base import PublishConnector
@@ -80,6 +82,41 @@ LOGGED_OUT_SELECTORS = [
     "text=短信登录",
     "text=发送验证码",
 ]
+QR_PROMPT_SELECTORS = [
+    "text=扫码登录",
+    "text=二维码登录",
+    "text=请使用小红书App扫码",
+    "text=打开小红书扫码",
+]
+QR_ELEMENT_SELECTORS = [
+    "[class*='qrcode'] canvas",
+    "[class*='qrcode'] img",
+    "[class*='qr-code'] canvas",
+    "[class*='qr-code'] img",
+    "img[alt*='二维码']",
+    "img[src*='qr']",
+    "canvas",
+]
+QR_CONTAINER_SELECTORS = [
+    "[class*='qrcode']",
+    "[class*='qr-code']",
+    "[class*='scan']",
+    "[class*='login']",
+    "[role='dialog']",
+]
+QR_SWITCH_SELECTORS = [
+    "text=扫码登录",
+    "text=二维码登录",
+    "text=APP扫一扫登录",
+    "xpath=//*[contains(normalize-space(.), '短信登录')]/ancestor::*[self::div or self::section or self::form][1]//img",
+]
+CHALLENGE_SELECTORS = [
+    "text=安全验证",
+    "text=请完成验证",
+    "text=滑块",
+    "text=风险验证",
+]
+LOGIN_SURFACE_SELECTORS = LOGGED_OUT_SELECTORS + QR_PROMPT_SELECTORS + QR_ELEMENT_SELECTORS + CHALLENGE_SELECTORS
 LOGGED_IN_SELECTORS = IMAGE_NOTE_TAB_SELECTORS + TEXT_IMAGE_ENTRY_SELECTORS + PUBLISH_SELECTORS
 
 
@@ -88,6 +125,7 @@ class XiaohongshuBrowserSettings:
     profile_dir: Path
     headless: bool
     executable_path: str | None
+    browser_cache_dir: Path | None
     channel: str | None
     locale: str | None
     timezone_id: str | None
@@ -133,37 +171,38 @@ class XiaohongshuConnector(PublishConnector):
         screenshots: list[str] = []
 
         try:
-            with self._playwright_module() as playwright:
-                browser = playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(settings.profile_dir),
-                    headless=settings.headless,
-                    executable_path=settings.executable_path,
-                    channel=settings.channel,
-                    locale=settings.locale,
-                    timezone_id=settings.timezone_id,
-                    args=settings.launch_args,
-                )
-                page = browser.new_page()
-                page.goto(intent.options.get("xhs_publish_url", DEFAULT_URL), wait_until="domcontentloaded")
-                _wait_for_publish_home(page)
-
-                if _looks_logged_out(page):
-                    browser.close()
-                    return self.failed_result(
-                        intent,
-                        draft,
-                        "login_required",
-                        "Xiaohongshu session is not logged in. Complete a manual login in the persistent profile first.",
+            with _override_playwright_browser_cache_dir(settings):
+                with self._playwright_module() as playwright:
+                    browser = playwright.chromium.launch_persistent_context(
+                        user_data_dir=str(settings.profile_dir),
+                        headless=settings.headless,
+                        executable_path=settings.executable_path,
+                        channel=settings.channel,
+                        locale=settings.locale,
+                        timezone_id=settings.timezone_id,
+                        args=settings.launch_args,
                     )
+                    page = browser.new_page()
+                    page.goto(intent.options.get("xhs_publish_url", DEFAULT_URL), wait_until="domcontentloaded")
+                    _wait_for_publish_home(page)
 
-                flow = str(intent.options.get("xhs_note_flow") or "").strip().lower()
-                if flow == "legacy_upload":
-                    result = self._run_legacy_upload_flow(intent, draft, context, page, screenshots)
-                else:
-                    result = self._run_text_image_flow(intent, draft, context, page, screenshots)
+                    if _looks_logged_out(page):
+                        browser.close()
+                        return self.failed_result(
+                            intent,
+                            draft,
+                            "login_required",
+                            "Xiaohongshu session is not logged in. Complete a manual login in the persistent profile first.",
+                        )
 
-                browser.close()
-                return result
+                    flow = str(intent.options.get("xhs_note_flow") or "").strip().lower()
+                    if flow == "legacy_upload":
+                        result = self._run_legacy_upload_flow(intent, draft, context, page, screenshots)
+                    else:
+                        result = self._run_text_image_flow(intent, draft, context, page, screenshots)
+
+                    browser.close()
+                    return result
         except Exception as error:  # pragma: no cover - depends on local browser/session state.
             return self.failed_result(
                 intent,
@@ -591,6 +630,18 @@ def _resolve_browser_settings(options: dict[str, Any] | None = None) -> Xiaohong
         or os.getenv("XHS_BROWSER_EXECUTABLE_PATH")
         or ""
     ).strip() or None
+    browser_cache_dir_raw = str(
+        options.get("xhs_browser_cache_dir")
+        or os.getenv("XHS_BROWSER_CACHE_DIR")
+        or ""
+    ).strip()
+    browser_cache_dir = (
+        Path(browser_cache_dir_raw).expanduser()
+        if browser_cache_dir_raw
+        else _resolve_playwright_browsers_path(os.environ)
+    )
+    if browser_cache_dir is not None:
+        browser_cache_dir.mkdir(parents=True, exist_ok=True)
     channel = str(
         options.get("browser_channel")
         or os.getenv("XHS_BROWSER_CHANNEL")
@@ -614,11 +665,61 @@ def _resolve_browser_settings(options: dict[str, Any] | None = None) -> Xiaohong
         profile_dir=profile_dir,
         headless=headless_value == "true",
         executable_path=executable_path,
+        browser_cache_dir=browser_cache_dir,
         channel=channel,
         locale=locale,
         timezone_id=timezone_id,
         launch_args=launch_args,
     )
+
+
+def _resolve_playwright_browsers_path(
+    env: Mapping[str, str] | None = None,
+    *,
+    home_dir: Path | None = None,
+    platform_name: str | None = None,
+) -> Path | None:
+    env = env or os.environ
+    raw_path = str(env.get("PLAYWRIGHT_BROWSERS_PATH") or "").strip()
+    if raw_path == "0":
+        return None
+    if raw_path and not _looks_like_cursor_sandbox_path(raw_path):
+        return Path(raw_path).expanduser()
+
+    resolved_home = home_dir or Path.home()
+    resolved_platform = platform_name or sys.platform
+    return _default_playwright_browsers_path(resolved_home, resolved_platform)
+
+
+def _default_playwright_browsers_path(home_dir: Path, platform_name: str) -> Path:
+    if platform_name == "darwin":
+        return home_dir / "Library" / "Caches" / "ms-playwright"
+    if platform_name.startswith("win"):
+        return home_dir / "AppData" / "Local" / "ms-playwright"
+    return home_dir / ".cache" / "ms-playwright"
+
+
+def _looks_like_cursor_sandbox_path(raw_path: str) -> bool:
+    normalized = raw_path.replace("\\", "/").lower()
+    return "cursor-sandbox-cache" in normalized and "/playwright" in normalized
+
+
+@contextmanager
+def _override_playwright_browser_cache_dir(settings: XiaohongshuBrowserSettings) -> Iterator[None]:
+    env_key = "PLAYWRIGHT_BROWSERS_PATH"
+    previous_value = os.environ.get(env_key)
+
+    try:
+        if settings.browser_cache_dir is not None:
+            os.environ[env_key] = str(settings.browser_cache_dir)
+        elif previous_value and _looks_like_cursor_sandbox_path(previous_value):
+            os.environ.pop(env_key, None)
+        yield
+    finally:
+        if previous_value is None:
+            os.environ.pop(env_key, None)
+        else:
+            os.environ[env_key] = previous_value
 
 
 def _parse_browser_args(raw_args: Any) -> list[str]:
@@ -749,7 +850,169 @@ def _png_chunk(chunk_type: bytes, data: bytes) -> bytes:
     )
 
 
+def _selector_count(page: Any, selector: str) -> int:
+    try:
+        return int(page.locator(selector).count())
+    except Exception:
+        return 0
+
+
+def _is_locator_captureable(candidate: Any) -> bool:
+    try:
+        box = candidate.bounding_box()
+        if box is None or not candidate.is_visible():
+            return False
+        if box["x"] < 0 or box["y"] < 0:
+            return False
+        if box["width"] <= 0 or box["height"] <= 0:
+            return False
+        return True
+    except Exception:
+        return False
+
+
+def _find_best_capture_target(
+    page: Any,
+    selectors: list[str],
+    *,
+    min_size: float = 0,
+    squareish: bool = False,
+) -> tuple[Any | None, str | None, dict[str, float] | None]:
+    best_locator = None
+    best_selector = None
+    best_box = None
+    best_score = -1.0
+
+    for selector in selectors:
+        locator = page.locator(selector)
+        count = locator.count()
+        for index in range(count):
+            candidate = locator.nth(index)
+            if not _is_locator_captureable(candidate):
+                continue
+            try:
+                box = candidate.bounding_box()
+                if box is None:
+                    continue
+                width = float(box["width"])
+                height = float(box["height"])
+                if width < min_size or height < min_size:
+                    continue
+                ratio = width / height if height > 0 else 0
+                if squareish and (ratio < 0.8 or ratio > 1.25):
+                    continue
+                score = width * height
+                if score > best_score:
+                    best_score = score
+                    best_locator = candidate
+                    best_selector = selector
+                    best_box = {"x": float(box["x"]), "y": float(box["y"]), "width": width, "height": height}
+            except Exception:
+                continue
+
+    return best_locator, best_selector, best_box
+
+
+def _detect_login_surface(page: Any) -> dict[str, Any]:
+    matched_logged_in = [selector for selector in LOGGED_IN_SELECTORS if _selector_count(page, selector) > 0]
+    if matched_logged_in:
+        return {
+            "kind": "publish_home",
+            "matched_selectors": matched_logged_in,
+            "qr_visible": False,
+            "sms_visible": False,
+            "challenge_visible": False,
+        }
+
+    matched_sms = [selector for selector in LOGGED_OUT_SELECTORS if _selector_count(page, selector) > 0]
+    matched_qr = [selector for selector in QR_PROMPT_SELECTORS + QR_ELEMENT_SELECTORS if _selector_count(page, selector) > 0]
+    matched_challenge = [selector for selector in CHALLENGE_SELECTORS if _selector_count(page, selector) > 0]
+
+    kind = "unknown"
+    if matched_qr:
+        kind = "qr"
+    elif matched_sms:
+        kind = "sms"
+    elif matched_challenge:
+        kind = "challenge"
+
+    return {
+        "kind": kind,
+        "matched_selectors": matched_sms + matched_qr + matched_challenge,
+        "qr_visible": bool(matched_qr),
+        "sms_visible": bool(matched_sms),
+        "challenge_visible": bool(matched_challenge),
+    }
+
+
+def _capture_login_surface_artifact(page: Any, path: Path) -> dict[str, Any]:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    qr_container_visible = any(_selector_count(page, selector) > 0 for selector in QR_CONTAINER_SELECTORS)
+    qr_candidate, qr_selector, qr_box = _find_best_capture_target(
+        page,
+        QR_ELEMENT_SELECTORS,
+        min_size=120,
+        squareish=True,
+    )
+    if qr_candidate is not None and (qr_container_visible or qr_selector in QR_ELEMENT_SELECTORS):
+        try:
+            qr_candidate.screenshot(path=str(path))
+            return {"type": "qr", "capture": "locator", "selector": qr_selector, "path": str(path)}
+        except Exception:
+            if qr_box is not None:
+                try:
+                    page.screenshot(path=str(path), clip=qr_box)
+                    return {"type": "qr", "capture": "clip", "selector": qr_selector, "path": str(path)}
+                except Exception:
+                    pass
+
+    container_candidate, container_selector, container_box = _find_best_capture_target(
+        page,
+        QR_CONTAINER_SELECTORS,
+        min_size=120,
+    )
+    if container_candidate is not None:
+        try:
+            container_candidate.screenshot(path=str(path))
+            return {"type": "screenshot", "capture": "locator", "selector": container_selector, "path": str(path)}
+        except Exception:
+            if container_box is not None:
+                try:
+                    page.screenshot(path=str(path), clip=container_box)
+                    return {"type": "screenshot", "capture": "clip", "selector": container_selector, "path": str(path)}
+                except Exception:
+                    pass
+
+    page.screenshot(path=str(path), full_page=True)
+    return {"type": "screenshot", "capture": "full_page", "selector": None, "path": str(path)}
+
+
+def _ensure_qr_login_surface(page: Any, attempts: int = 2) -> dict[str, Any]:
+    surface = _detect_login_surface(page)
+    if surface["kind"] != "sms":
+        return surface
+
+    for _ in range(max(1, attempts)):
+        if not _click_visible_first(page, QR_SWITCH_SELECTORS):
+            break
+        page.wait_for_timeout(1200)
+        surface = _detect_login_surface(page)
+        if surface["kind"] == "qr" or surface["qr_visible"]:
+            return surface
+
+    return _detect_login_surface(page)
+
+
 def _looks_logged_out(page: Any) -> bool:
+    try:
+        surface = _detect_login_surface(page)
+        if surface["kind"] == "publish_home":
+            return False
+        if surface["kind"] in {"qr", "sms", "challenge"}:
+            return True
+    except Exception:
+        surface = None
+
     try:
         current_url = str(page.url).lower()
     except Exception:
@@ -759,10 +1022,8 @@ def _looks_logged_out(page: Any) -> bool:
         return True
 
     try:
-        if any(page.locator(selector).count() > 0 for selector in LOGGED_IN_SELECTORS):
-            return False
-
-        matched_logged_out_selectors = sum(page.locator(selector).count() > 0 for selector in LOGGED_OUT_SELECTORS)
-        return matched_logged_out_selectors >= 2
+        if surface is None:
+            surface = _detect_login_surface(page)
+        return len(surface["matched_selectors"]) >= 2
     except Exception:
         return False

@@ -6,7 +6,7 @@ import path from "node:path";
 
 import { buildPythonModuleCommand, resolveProjectPython } from "../../src/ts/publishing/python-command.js";
 import { buildPublisherCommand, runPublishIntent } from "../../src/ts/publishing/python-runner.js";
-import { buildXiaohongshuSessionCommand } from "../../src/ts/publishing/xiaohongshu-session-runner.js";
+import { buildXiaohongshuSessionCommand, runJsonCommandWithProgress } from "../../src/ts/publishing/xiaohongshu-session-runner.js";
 
 test("buildPublisherCommand injects local PYTHONPATH", () => {
   const command = buildPublisherCommand();
@@ -22,7 +22,7 @@ test("resolveProjectPython prefers the local virtualenv interpreter", () => {
   const pythonPath = path.join(venvDir, "python");
   fs.writeFileSync(pythonPath, "");
 
-  assert.equal(resolveProjectPython(cwd, {}), pythonPath);
+  assert.equal(resolveProjectPython(cwd, { ...process.env }), pythonPath);
 });
 
 test("buildPythonModuleCommand respects the explicit Python override", () => {
@@ -51,4 +51,48 @@ test("runPublishIntent returns Python runner output", () => {
   assert.equal(result.status, "prepared");
   assert.equal(result.platform, "x");
   assert.equal(typeof result.draft_artifact.text, "string");
+});
+
+test("runJsonCommandWithProgress reports progress updates from a parent-owned file", async () => {
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "marketing-fox-progress-"));
+  const progressPath = path.join(tempDir, "progress.json");
+  const seenPhases: string[] = [];
+  const script = [
+    "const fs = require('node:fs');",
+    "let input = '';",
+    "process.stdin.on('data', (chunk) => { input += chunk.toString(); });",
+    "process.stdin.on('end', () => {",
+    "  fs.writeFileSync(process.env.PROGRESS_FILE, JSON.stringify({ phase: 'awaiting_qr_scan', status_message: 'waiting' }));",
+    "  setTimeout(() => {",
+    "    fs.writeFileSync(process.env.PROGRESS_FILE, JSON.stringify({ phase: 'completed', status_message: 'done' }));",
+    "    process.stdout.write(JSON.stringify({ status: 'ok' }) + '\\n');",
+    "  }, 80);",
+    "});"
+  ].join("");
+
+  const result = await runJsonCommandWithProgress<{ status: string }>(
+    {
+      command: process.execPath,
+      args: ["-e", script],
+      cwd: tempDir,
+      env: {
+        ...process.env,
+        PROGRESS_FILE: progressPath
+      }
+    },
+    { action: "login" },
+    {
+      progressFilePath: progressPath,
+      progressPollIntervalMs: 20,
+      onProgress: (progress) => {
+        if (progress.phase) {
+          seenPhases.push(progress.phase);
+        }
+      }
+    }
+  );
+
+  assert.equal(result.status, "ok");
+  assert.equal(seenPhases.length > 0, true);
+  assert.equal(seenPhases.includes("completed"), true);
 });

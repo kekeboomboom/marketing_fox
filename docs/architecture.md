@@ -25,9 +25,9 @@ This layer should answer:
 
 ### Service Layer
 
-- `src/ts/api-server.ts`: HTTP API service entry point (`npm run api`) for operator-facing and agent-facing access
-- exposes publish, session, job-status, and capability endpoints
-- calls the same publishing core used by the existing CLI
+- HTTP API entry point for operator-facing and agent-facing access
+- should expose publish, session, job-status, and capability endpoints
+- should call the same publishing core used by the existing CLI
 
 This layer should answer:
 
@@ -67,8 +67,13 @@ This layer should answer:
 - `小红书` uses browser automation rather than a public creator-post API in v1.
 - `小红书` server deployment should preserve a persistent browser profile and treat re-login as an operator workflow instead of an automatic retry path.
 - `小红书` should expose explicit session bootstrap and session-check commands so Linux operators can prepare and validate the browser profile without manually driving each publish run.
+- For Linux deployment, `小红书` login bootstrap should switch to QR-code mode in the server-side browser and return the cropped QR image through the API so operators can scan it from the Web console.
+- For Linux deployment, Playwright browser binaries should come from an explicit server cache directory such as `XHS_BROWSER_CACHE_DIR` or the standard OS cache location. Do not rely on IDE-specific sandbox cache paths as the formal runtime contract.
+- On the shared `test` server, deploy with Docker Compose and keep Nginx as the only public edge.
+- For the shared `test` server, front-end and API containers should bind to unique localhost-only ports, and Nginx should route `/` to the Web container and `/api/` to the API container.
+- Shared-host deployment must keep a project-unique domain, `APP_DIR`, stack name, frontend port, backend port, and isolated runtime env files.
 - The default `小红书` note-publishing path is the `上传图文 -> 文字配图` browser flow, not direct image upload.
 - In the default `小红书` flow, the system should generate the image from text, keep the default preview card, apply one suggested `智能标题`, select three suggested `话题`, and then publish unless the operator explicitly asks to stop earlier.
 
 See [Publishing Operator Contract](./publishing-operator-contract.md) for the interaction-level rules that sit above these runtime constraints.
-See [Service API Contract](./service-api-contract.md) for the HTTP boundary that sits in front of the current publish runner.
+See [Service API Contract](./service-api-contract.md) for the planned HTTP boundary that should sit in front of the current publish runner.

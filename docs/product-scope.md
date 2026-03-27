@@ -52,6 +52,7 @@ Build a personal marketing agent that helps creators and operators grow audience
 - `小红书` publishing is implemented via local browser automation with a persistent user session.
 - `小红书` Linux deployment should reuse a persistent browser profile instead of relying on a cookie-only login shortcut.
 - `小红书` automation includes a dedicated login bootstrap and session-check path so operators do not have to manually click through every publish attempt.
+- The first shared-server rollout target is a Docker-based `test` deployment behind Nginx, with project-specific localhost ports and persistent runtime storage.
 - `微信公众号` publishing follows the draft-and-publish article model.
 - `X` publishing targets single-post creation first.
-- A short idea is treated as source input and expanded into platform-native draft content before publish.
+- A short idea may be expanded into platform-native draft content during preparation flows, but operator-provided final publish text should be preserved by default for direct publish paths such as `小红书` `draft`/`publish`.

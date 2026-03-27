@@ -33,3 +33,27 @@ export function sendJson(response: ServerResponse, statusCode: number, payload: 
 export function sendError(response: ServerResponse, statusCode: number, error: ApiErrorPayload): void {
   sendJson(response, statusCode, { error });
 }
+
+export function sendBinary(
+  response: ServerResponse,
+  statusCode: number,
+  content: Buffer,
+  options: {
+    contentType: string;
+    fileName?: string;
+    cacheControl?: string;
+  }
+): void {
+  const headers: Record<string, string | number> = {
+    "Content-Type": options.contentType,
+    "Content-Length": content.byteLength,
+    "Cache-Control": options.cacheControl ?? "no-store"
+  };
+
+  if (options.fileName) {
+    headers["Content-Disposition"] = `inline; filename="${options.fileName}"`;
+  }
+
+  response.writeHead(statusCode, headers);
+  response.end(content);
+}

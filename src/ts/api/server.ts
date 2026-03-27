@@ -1,19 +1,20 @@
 import http from "node:http";
 
-import type { PublishMode, PlatformId } from "../connectors/platform.js";
-import { supportedPlatforms } from "../config/platforms.js";
-import type { PublishIntent } from "../publishing/types.js";
 import { loadServiceConfig } from "./config.js";
-import { hasBearerToken } from "./auth.js";
-import { sendError, sendJson, parseJsonBody } from "./http.js";
+import { authenticateActor } from "./auth.js";
+import { badRequest, internalError, isApiError, notFound, unauthorized } from "./errors.js";
+import { sendBinary, sendError, sendJson, parseJsonBody } from "./http.js";
 import { JobStore } from "./job-store.js";
 import { createDefaultServiceAdapters, JobRunner, type ServiceAdapters } from "./job-runner.js";
-import type { ApiErrorPayload, ServiceConfig } from "./types.js";
+import { MarketingFoxService } from "./marketing-fox-service.js";
+import type { ServiceConfig } from "./types.js";
+import { validateJsonObject } from "./validators.js";
 
 interface CreateServerOptions {
   config?: ServiceConfig;
   adapters?: ServiceAdapters;
   store?: JobStore;
+  service?: MarketingFoxService;
 }
 
 export function createMarketingFoxApiServer(options: CreateServerOptions = {}): http.Server {
@@ -21,10 +22,11 @@ export function createMarketingFoxApiServer(options: CreateServerOptions = {}): 
   const store = options.store ?? new JobStore(config.dataDir);
   store.recoverInterruptedJobs();
   const adapters = options.adapters ?? createDefaultServiceAdapters();
-  const runner = new JobRunner(store, adapters, config.logTailLimit);
+  const runner = new JobRunner(store, adapters, config.logTailLimit, config.artifactsDir);
+  const service = options.service ?? new MarketingFoxService(config, store, runner, adapters);
 
   return http.createServer((request, response) => {
-    void handleRequest(request, response, { config, adapters, store, runner });
+    void handleRequest(request, response, { config, service });
   });
 }
 
@@ -33,9 +35,7 @@ async function handleRequest(
   response: http.ServerResponse,
   context: {
     config: ServiceConfig;
-    adapters: ServiceAdapters;
-    store: JobStore;
-    runner: JobRunner;
+    service: MarketingFoxService;
   }
 ): Promise<void> {
   try {
@@ -43,206 +43,141 @@ async function handleRequest(
     const method = request.method ?? "GET";
 
     if (method === "GET" && url.pathname === "/api/v1/health") {
-      sendJson(response, 200, {
-        status: "ok",
-        service: "marketing_fox",
-        version: context.config.version
-      });
+      sendJson(response, 200, context.service.health());
       return;
     }
 
-    if (!hasBearerToken(request.headers, context.config.token)) {
-      sendError(response, 401, {
-        code: "unauthorized",
-        message: "Missing or invalid bearer token.",
-        retryable: false
-      });
+    if (method === "POST" && url.pathname === "/api/auth/login") {
+      const body = await parseJsonBody(request).catch(() => ({}));
+      const payload = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
+      const password = typeof payload.password === "string" ? payload.password : "";
+      if (password === context.config.operatorPassword) {
+        const age = 60 * 60 * 24 * 7; // 7 days
+        response.setHeader(
+          "Set-Cookie",
+          `${context.config.operatorCookieName}=${encodeURIComponent(context.config.operatorPassword)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}`
+        );
+        sendJson(response, 200, { authenticated: true });
+      } else {
+        throw unauthorized("Invalid password.");
+      }
       return;
+    }
+
+    if (method === "GET" && url.pathname === "/api/auth/session") {
+      const actor = authenticateActor(request.headers, {
+        bearerToken: context.config.token,
+        operatorPassword: context.config.operatorPassword,
+        operatorCookieName: context.config.operatorCookieName
+      });
+      if (actor) {
+        sendJson(response, 200, { authenticated: true });
+      } else {
+        throw unauthorized("Not authenticated.");
+      }
+      return;
+    }
+
+    if (method === "POST" && url.pathname === "/api/auth/logout") {
+      response.setHeader(
+        "Set-Cookie",
+        `${context.config.operatorCookieName}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
+      );
+      sendJson(response, 200, { ok: true });
+      return;
+    }
+
+    const actor = authenticateActor(request.headers, {
+      bearerToken: context.config.token,
+      operatorPassword: context.config.operatorPassword,
+      operatorCookieName: context.config.operatorCookieName
+    });
+
+    if (!actor) {
+      throw unauthorized("Missing or invalid bearer token.");
     }
 
     if (method === "GET" && url.pathname === "/api/v1/platforms") {
-      sendJson(response, 200, {
-        platforms: supportedPlatforms.map((platform) => ({
-          id: platform.id,
-          display_name: platform.displayName,
-          modes: ["prepare", "draft", "publish"],
-          requires_session: platform.authStrategy === "browser_session"
-        }))
-      });
+      sendJson(response, 200, context.service.listPlatforms(actor));
       return;
     }
 
     if (method === "POST" && url.pathname === "/api/v1/publish") {
       const body = await parseJsonObject(request);
-      const intent = validatePublishIntent(body);
-      const job = context.runner.enqueuePublish(intent);
-      sendJson(response, 202, { job });
+      sendJson(response, 202, context.service.createPublishJob(actor, body));
       return;
     }
 
     if (method === "POST" && url.pathname === "/api/v1/publish/prepare") {
       const body = await parseJsonObject(request);
-      const intent = validatePublishIntent(body, "prepare");
-      const job = context.runner.enqueuePublish(intent);
-      sendJson(response, 202, { job });
+      sendJson(response, 202, context.service.createPublishJob(actor, body, "prepare"));
+      return;
+    }
+
+    if (method === "GET" && url.pathname === "/api/v1/jobs") {
+      sendJson(response, 200, context.service.listJobsFromSearchParams(actor, url.searchParams));
       return;
     }
 
     if (method === "GET" && url.pathname.startsWith("/api/v1/jobs/")) {
-      const jobId = decodeURIComponent(url.pathname.slice("/api/v1/jobs/".length));
-      if (!jobId) {
-        throw createBadRequest("invalid_request", "Job id must not be empty.");
+      const segments = url.pathname.split("/").filter(Boolean);
+      if (segments.length === 4 && segments[0] === "api" && segments[1] === "v1" && segments[2] === "jobs") {
+        const jobId = decodeURIComponent(segments[3] ?? "");
+        sendJson(response, 200, context.service.getJob(actor, jobId));
+        return;
       }
-
-      const job = context.store.getJob(jobId);
-      if (!job) {
-        sendError(response, 404, {
-          code: "job_not_found",
-          message: "No job exists for the requested id.",
-          retryable: false
+      if (
+        segments.length === 6 &&
+        segments[0] === "api" &&
+        segments[1] === "v1" &&
+        segments[2] === "jobs" &&
+        segments[4] === "artifacts"
+      ) {
+        const jobId = decodeURIComponent(segments[3] ?? "");
+        const artifactId = decodeURIComponent(segments[5] ?? "");
+        const content = context.service.getJobArtifact(actor, jobId, artifactId);
+        sendBinary(response, 200, content.content, {
+          contentType: content.contentType,
+          fileName: content.fileName
         });
         return;
       }
-
-      sendJson(response, 200, { job });
-      return;
+      throw notFound("not_found", "The requested route does not exist.");
     }
 
     if (method === "POST" && url.pathname === "/api/v1/xhs/session/check") {
       const body = await parseJsonObject(request);
-      const options = validateOptionsObject(body.options);
-      const session = await context.adapters.checkXiaohongshuSession(options);
-      const statusCode = session.error?.code === "missing_dependency" ? 503 : 200;
-      sendJson(response, statusCode, { session });
+      const result = await context.service.checkXiaohongshuSession(actor, body);
+      sendJson(response, result.statusCode, { session: result.session });
       return;
     }
 
     if (method === "POST" && url.pathname === "/api/v1/xhs/session/login-bootstrap") {
-      if (context.store.hasActiveJob("xhs_session_login")) {
-        sendError(response, 409, {
-          code: "job_conflict",
-          message: "A Xiaohongshu login bootstrap job is already active.",
-          retryable: false
-        });
-        return;
-      }
-
       const body = await parseJsonObject(request);
-      const options = validateOptionsObject(body.options);
-      const job = context.runner.enqueueXiaohongshuLogin(options);
-      sendJson(response, 202, { job });
+      sendJson(response, 202, context.service.createXiaohongshuLoginJob(actor, body));
       return;
     }
 
-    sendError(response, 404, {
-      code: "not_found",
-      message: "The requested route does not exist.",
-      retryable: false
-    });
+    throw notFound("not_found", "The requested route does not exist.");
   } catch (error) {
     if (isApiError(error)) {
       sendError(response, error.statusCode, error.payload);
       return;
     }
 
-    sendError(response, 500, {
-      code: "internal_error",
-      message: error instanceof Error ? error.message : String(error),
-      retryable: true
-    });
+    const normalized = internalError(error);
+    sendError(response, normalized.statusCode, normalized.payload);
   }
 }
 
 async function parseJsonObject(request: http.IncomingMessage): Promise<Record<string, unknown>> {
   try {
-    const payload = await parseJsonBody(request);
-    if (payload === null || Array.isArray(payload) || typeof payload !== "object") {
-      throw createBadRequest("invalid_request", "Request body must be a JSON object.");
-    }
-
-    return payload as Record<string, unknown>;
+    return validateJsonObject(await parseJsonBody(request));
   } catch (error) {
     if (error instanceof SyntaxError) {
-      throw createBadRequest("invalid_request", "Request body must contain valid JSON.");
+      throw badRequest("invalid_request", "Request body must contain valid JSON.");
     }
 
     throw error;
   }
-}
-
-function validatePublishIntent(payload: Record<string, unknown>, forcedMode?: PublishMode): PublishIntent {
-  const platform = payload.platform;
-  if (!isPlatformId(platform)) {
-    throw createBadRequest("unsupported_platform", `Unsupported platform: ${String(platform ?? "<empty>")}`);
-  }
-
-  const sourceIdea = typeof payload.source_idea === "string" ? payload.source_idea.trim() : "";
-  if (!sourceIdea) {
-    throw createBadRequest("invalid_request", "source_idea must not be empty.");
-  }
-
-  const modeCandidate = forcedMode ?? payload.mode;
-  if (!isPublishMode(modeCandidate)) {
-    throw createBadRequest("invalid_mode", `Unsupported publish mode: ${String(modeCandidate ?? "<empty>")}`);
-  }
-
-  const assets = payload.assets ?? [];
-  if (!Array.isArray(assets)) {
-    throw createBadRequest("invalid_request", "assets must be a list.");
-  }
-
-  const options = validateOptionsObject(payload.options);
-
-  return {
-    platform,
-    source_idea: sourceIdea,
-    mode: modeCandidate,
-    assets: assets.map((asset) => String(asset)),
-    options
-  };
-}
-
-function validateOptionsObject(value: unknown): Record<string, unknown> {
-  if (value === undefined) {
-    return {};
-  }
-
-  if (value === null || Array.isArray(value) || typeof value !== "object") {
-    throw createBadRequest("invalid_request", "options must be an object.");
-  }
-
-  return value as Record<string, unknown>;
-}
-
-function isPlatformId(value: unknown): value is PlatformId {
-  return typeof value === "string" && supportedPlatforms.some((platform) => platform.id === value);
-}
-
-function isPublishMode(value: unknown): value is PublishMode {
-  return value === "prepare" || value === "draft" || value === "publish";
-}
-
-function createBadRequest(code: string, message: string): ApiRequestError {
-  return {
-    statusCode: 400,
-    payload: {
-      code,
-      message,
-      retryable: false
-    }
-  };
-}
-
-interface ApiRequestError {
-  statusCode: number;
-  payload: ApiErrorPayload;
-}
-
-function isApiError(error: unknown): error is ApiRequestError {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "statusCode" in error &&
-    "payload" in error
-  );
 }

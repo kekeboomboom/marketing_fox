@@ -1,0 +1,14 @@
+node_modules
+.next
+.venv
+.local
+.artifacts
+runtime
+output
+coverage
+.git
+.DS_Store
+Thumbs.db
+*.log
+.env
+.env.test

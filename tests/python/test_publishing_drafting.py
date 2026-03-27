@@ -19,6 +19,20 @@ def test_generate_xiaohongshu_draft_from_short_idea() -> None:
     assert draft.cover_hint
 
 
+def test_generate_xiaohongshu_draft_preserves_source_text_by_default() -> None:
+    source_text = "《静夜思》\n\n床前明月光，\n疑是地上霜。\n举头望明月，\n低头思故乡。"
+    intent = PublishIntent(
+        platform="xiaohongshu",
+        source_idea=source_text,
+        mode="publish",
+    )
+
+    draft = generate_draft(intent)
+
+    assert draft.body == source_text
+    assert draft.metadata["preserve_source_text"] is True
+
+
 def test_generate_wechat_draft_contains_html() -> None:
     intent = PublishIntent(
         platform="wechat_official_account",

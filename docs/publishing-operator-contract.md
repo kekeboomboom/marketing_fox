@@ -30,7 +30,6 @@ In the current repo, the operator-facing commands are:
 - `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`
 - `npm run xhs:check`
 - `npm run xhs:login`
-- `npm run api` (HTTP service; requires `MARKETING_FOX_API_TOKEN`, see `docs/service-api-contract.md`)
 
 ## Request Handling Contract
 
@@ -39,6 +38,7 @@ In the current repo, the operator-facing commands are:
 - Treat the provided content as the source of truth.
 - Prefer preserving the original content rather than rewriting it.
 - Send that content into the formal publish program.
+- For `小红书`, default `draft` and `publish` runs should send the provided body verbatim unless the operator explicitly asks for rewriting or a separate drafting step.
 
 ### If the operator provides only a topic or idea
 

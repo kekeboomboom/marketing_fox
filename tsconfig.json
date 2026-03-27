@@ -1,16 +1,38 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
     "strict": true,
     "esModuleInterop": true,
+    "jsx": "react-jsx",
+    "noEmit": true,
+    "isolatedModules": true,
+    "incremental": true,
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "es2022"
+    ],
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
-    "rootDir": "src/ts",
-    "outDir": "dist/ts"
+    "plugins": [
+      {
+        "name": "next"
+      }
+    ],
+    "allowJs": true,
+    "resolveJsonModule": true
   },
   "include": [
-    "src/ts/**/*.ts"
+    "next-env.d.ts",
+    "src/app/**/*",
+    "src/components/**/*",
+    "src/lib/**/*",
+    ".next/types/**/*.ts",
+    ".next/dev/types/**/*.ts"
+  ],
+  "exclude": [
+    "node_modules"
   ]
 }

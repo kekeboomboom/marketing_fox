@@ -72,13 +72,17 @@ If deployed with Docker, mount that path as a host volume. If deployed with syst
 1. Start the Linux browser environment with the same profile directory that production automation will use.
 2. Launch Playwright in non-headless mode.
 3. Open `https://creator.xiaohongshu.com/publish/publish`.
-4. Complete QR-code login, SMS verification, or any extra challenge manually.
-5. Confirm that the publish page is accessible without the login form.
-6. Close the browser cleanly so the profile state is flushed to disk.
+4. If the site lands on SMS login first, switch the login card to QR-code mode on the server-side browser.
+5. Expose the QR-code image back to the operator Web console as a server-generated artifact so the operator can scan it remotely.
+6. Complete QR-code login, SMS verification, or any extra challenge manually.
+7. Confirm that the publish page is accessible without the login form.
+8. Close the browser cleanly so the profile state is flushed to disk.
 
 Important rule:
 
 The manual login should happen in the same server-side browser environment that later runs the automated publish flow. Do not assume that a profile copied from a different laptop or operating system will remain stable.
+
+For remote Linux operation, the operator should not need shell access or a local copy of the server browser. The server should render the QR code inside the persistent browser session, crop that QR region into an artifact, and stream it through the service API to the operator Web page.
 
 ## Runtime Session Strategy
 

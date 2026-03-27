@@ -1,0 +1,57 @@
+services:
+  api:
+    image: ${MARKETING_FOX_API_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ${MARKETING_FOX_ENV_FILE:-.env.test}
+    environment:
+      MARKETING_FOX_API_HOST: 0.0.0.0
+      MARKETING_FOX_API_PORT: 3001
+      MARKETING_FOX_DATA_DIR: /data/marketing_fox/service-data
+      MARKETING_FOX_ARTIFACTS_DIR: /data/marketing_fox/artifacts
+      MARKETING_FOX_PUBLISH_PYTHON: /opt/venv/bin/python
+      XHS_PROFILE_DIR: /data/marketing_fox/xhs-profile
+      XHS_BROWSER_CACHE_DIR: /ms-playwright
+    ports:
+      - 127.0.0.1:${MARKETING_FOX_BACKEND_PORT:-20001}:3001
+    volumes:
+      - ${MARKETING_FOX_RUNTIME_DIR:-./runtime}/service-data:/data/marketing_fox/service-data
+      - ${MARKETING_FOX_RUNTIME_DIR:-./runtime}/artifacts:/data/marketing_fox/artifacts
+      - ${MARKETING_FOX_RUNTIME_DIR:-./runtime}/xhs-profile:/data/marketing_fox/xhs-profile
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3001/api/v1/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    image: ${MARKETING_FOX_WEB_IMAGE}
+    restart: unless-stopped
+    env_file:
+      - ${MARKETING_FOX_ENV_FILE:-.env.test}
+    environment:
+      MARKETING_FOX_WEB_API_BASE_URL: http://api:3001
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - 127.0.0.1:${MARKETING_FOX_FRONTEND_PORT:-20000}:3000
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/xhs').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1))"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
