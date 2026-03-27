@@ -56,11 +56,12 @@ Versioning rule:
 
 The initial service model should use simple operator-focused authentication.
 
-Current implementation:
+Recommended v1 approach:
 
 - bearer token authentication for server-to-server and automation clients
 - cookie-backed operator session for the Web console, backed by the same user identity model
 - `GET /api/v1/health` is intentionally unauthenticated so local probes and deploy checks can run before credentials are wired in
+- one initial admin/operator role
 
 Request header:
 
@@ -532,17 +533,16 @@ Until then, clients should assume repeated calls may create repeated jobs.
 
 ## Job Execution Model
 
-The current implementation separates HTTP request handling from actual publish execution inside the same service process.
+The implementation should separate HTTP request handling from actual publish execution.
 
-Current behavior:
+Recommended v1 shape:
 
-- API handlers validate the request and write a job record before execution starts
-- background execution is scheduled asynchronously after the HTTP response returns
-- job state is stored as JSON files under `MARKETING_FOX_DATA_DIR/jobs`
-- clients poll `GET /api/v1/jobs/{id}` for completion
-- service startup recovers any `queued` or `running` job as failed with code `job_interrupted`
+- API process validates and records the job
+- background worker executes the job
+- job state is stored in a persistent store
+- clients poll `GET /jobs/{id}` for completion
 
-This keeps the first worker implementation simple without introducing a distributed queue yet.
+The first worker implementation can be simple. It does not need a distributed queue before the product actually needs one.
 
 ## Observability
 
@@ -562,11 +562,11 @@ This API is intended to sit beneath both the Web console and OpenClaw integratio
 
 Expected mapping:
 
-- Web console create form calls `POST /api/v1/publish`
-- Web console session widget calls `POST /api/v1/xhs/session/check`
-- Web console re-login flow calls `POST /api/v1/xhs/session/login-bootstrap`
-- OpenClaw skill calls `POST /api/v1/publish` for `prepare`, `draft`, or `publish`
-- both channels poll `GET /api/v1/jobs/{id}` for result
+- Web console create form calls `POST /publish`
+- Web console session widget calls `POST /xhs/session/check`
+- Web console re-login flow calls `POST /xhs/session/login-bootstrap`
+- OpenClaw skill calls `POST /publish` for `prepare`, `draft`, or `publish`
+- both channels poll `GET /jobs/{id}` for result
 
 This keeps product entry points thin and consistent.
 
@@ -664,18 +664,17 @@ Its first responsibilities should be:
 
 The Web page should remain a thin client of this API rather than embedding publish logic directly.
 
-## Implementation Status
+## Implementation Priorities
 
-The current service already includes:
+The recommended implementation order is:
 
-1. `GET /api/v1/health`
-2. `GET /api/v1/platforms`
-3. `POST /api/v1/publish`
-4. `GET /api/v1/jobs/{id}`
-5. `POST /api/v1/xhs/session/check`
-6. `POST /api/v1/xhs/session/login-bootstrap`
-
-Optional artifact retrieval remains a future follow-up.
+1. add `GET /health`
+2. add `GET /platforms`
+3. add `POST /publish`
+4. add `GET /jobs/{id}`
+5. add `POST /xhs/session/check`
+6. add `POST /xhs/session/login-bootstrap`
+7. add optional artifact retrieval
 
 ## Related Docs
 
