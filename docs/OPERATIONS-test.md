@@ -4,6 +4,17 @@ This document defines the repo-local deployment contract for `marketing_fox` on 
 
 It is written to match the shared host rules documented in the shared `test-server` docs.
 
+## Current Rollout Status
+
+As of March 27, 2026:
+
+- commit `91aa92e` is deployed on the shared `test` host from `origin/main`
+- GitHub Actions workflow `publish-test-images` run `23638013123` completed successfully and published the `test` images to GHCR
+- the host now has `/srv/marketing_fox-test`, a generated `.env.test`, runtime directories, and the repo checkout on disk
+- `docker compose --env-file .env.test -f compose.test.yml ps` reports both `api` and `web` as healthy on `127.0.0.1:20001` and `127.0.0.1:20000`
+- Nginx now loads `/etc/nginx/conf.d/marketing_fox-test.conf`, and host-resolved requests to `marketingfox-test.keboom.ai/xhs` and `marketingfox-test.keboom.ai/api/v1/health` return `200`
+- the remaining open issue is the public edge outside the host: direct external requests to `http://marketingfox-test.keboom.ai/...` still return a Cloudflare `404`, so DNS and/or Cloudflare proxy routing still needs to be finished
+
 ## Current Repo State
 
 - The repo already has a long-running TypeScript API service started with `npm run api`.
@@ -23,7 +34,7 @@ The shared host contract also requires:
 - a unique Compose stack name
 - isolated runtime env files and persistent storage
 
-Those requirements are now reflected in the repo deployment files, but the host-side Nginx and deploy wrapper still need to be applied on the server.
+Those requirements are now reflected in both the repo deployment files and the current host rollout. The remaining gap is outside the app host: the public Cloudflare and DNS path still does not route external traffic to this Nginx server block.
 
 ## Required Unique Allocations
 
@@ -87,6 +98,10 @@ MARKETING_FOX_ENV_FILE=.env.test sh deploy/test/deploy.sh
 8. Route `/` to `127.0.0.1:20000` and `/api/` to `127.0.0.1:20001`.
 9. Reload Nginx after the new server block is enabled.
 
+Operational note:
+
+- On a cold host, the first `deploy/test/deploy.sh` run may fail its immediate frontend curl check if the Next.js container is still warming up while large image layers are being unpacked. If that happens, verify `docker compose ... ps`, wait for `web` to become healthy, then rerun the validation and reload Nginx.
+
 ## Validation And Risks
 
 Validate the deployment in this order:
@@ -94,8 +109,14 @@ Validate the deployment in this order:
 1. `docker compose --env-file .env.test -f compose.test.yml ps`
 2. `curl -sS http://127.0.0.1:20001/api/v1/health`
 3. `curl -I http://127.0.0.1:20000/xhs`
-4. `curl -I https://marketingfox-test.keboom.ai`
-5. `curl -sS https://marketingfox-test.keboom.ai/api/v1/health`
+4. `curl -i --resolve marketingfox-test.keboom.ai:80:127.0.0.1 http://marketingfox-test.keboom.ai/xhs`
+5. `curl -i --resolve marketingfox-test.keboom.ai:80:127.0.0.1 http://marketingfox-test.keboom.ai/api/v1/health`
+6. `curl -I http://marketingfox-test.keboom.ai/xhs`
+
+Current known result:
+
+- Steps 1 through 5 succeed on the host as of March 27, 2026.
+- Step 6 still fails from outside the host with a Cloudflare `404`, so the deploy is internally healthy but not yet fully exposed through the public edge.
 
 Operational risks:
 

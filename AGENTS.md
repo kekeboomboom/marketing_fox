@@ -22,11 +22,14 @@ The long-term product may expand to YouTube, TikTok, Facebook, Bilibili, Douyin,
 - Do not commit real credentials. Use `.env` and update `.env.example` when adding config.
 - Update `docs/product-scope.md` and `docs/architecture.md` when adding a new platform or major subsystem.
 - Prefer small, explicit abstractions over premature framework setup.
+- Treat Linux server deployment as the primary runtime model for this project. Do not design features that only work inside a local Cursor/AI-agent session.
+- When local debugging and server deployment differ, prioritize changes that keep the formal program, browser automation, session storage, artifacts, and operator flow usable on a Linux server with explicit environment configuration and durable storage.
 
 ## Operator Defaults
 
 - When the user asks to publish content, the first priority is always the repository's formal publishing program. Do not default to manual browser clicking or ad hoc AI-operated page interactions when the program path exists or should exist.
-- The current formal operator entry points are `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`, `npm run xhs:check`, `npm run xhs:login`, and `npm run api` (HTTP service; requires `MARKETING_FOX_API_TOKEN`).
+- The current formal publishing entry points are `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`, `npm run xhs:check`, and `npm run xhs:login`.
+- The current formal operator service entry point is `npm run api` (HTTP service; requires `MARKETING_FOX_API_TOKEN`).
 - The internal browser-based operator surface is the Next.js Web app (`npm run web:dev` for local development, `npm run start` after `npm run build` in deployment). It should drive the same HTTP API and publish core rather than introducing a separate publish path.
 - The current formal operator entry points are `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`, `npm run xhs:check`, `npm run xhs:login`, and `npm run api` (HTTP service; `GET /api/v1/health` is open for probes, all other routes require `MARKETING_FOX_API_TOKEN`).
 - The internal browser-based operator surface is the Next.js Web app (`npm run web:dev` for local development, `npm run start` after `npm run build` in deployment). It should drive the same HTTP API and publish core rather than introducing a separate publish path.
