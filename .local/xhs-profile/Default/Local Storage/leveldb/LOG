@@ -1,8 +1,0 @@
-2026/03/22-19:59:24.055 75a587 Reusing MANIFEST /Users/keboom/codeProject/marketing_fox/.local/xhs-profile/Default/Local Storage/leveldb/MANIFEST-000001
-2026/03/22-19:59:24.058 75a587 Recovering log #4
-2026/03/22-19:59:24.059 75a587 Level-0 table #6: started
-2026/03/22-19:59:24.063 75a587 Level-0 table #6: 25678 bytes OK
-2026/03/22-19:59:24.063 75a587 Recovering log #6
-2026/03/22-19:59:24.064 75a587 Reusing old log /Users/keboom/codeProject/marketing_fox/.local/xhs-profile/Default/Local Storage/leveldb/000006.log 
-2026/03/22-19:59:24.067 75a587 Delete type=0 #4
-2026/03/22-19:59:24.067 75a587 Delete type=2 #7
