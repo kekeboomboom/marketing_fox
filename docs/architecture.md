@@ -12,20 +12,24 @@ The project is split by runtime responsibility instead of by framework trend.
 ### TypeScript Layer
 
 - `src/ts/index.ts`: local entry point for orchestration
+- `src/ts/api-server.ts`: HTTP service entry point
 - `src/ts/agents/marketing-agent.ts`: top-level marketing agent definition
 - `src/ts/connectors/platform.ts`: platform connector contract
 - `src/ts/config/platforms.ts`: supported platform metadata
 - `src/ts/publishing/python-runner.ts`: bridge into the Python publishing runner
+- `src/app/` and `src/components/`: internal Next.js operator console for login and Xiaohongshu job/session workflows
 
 This layer should answer:
 
 - What platform are we targeting?
 - What content format is appropriate?
 - What workflow step happens next?
+- Which operator-facing surface should call the shared API for the current task?
 
 ### Service Layer
 
 - HTTP API entry point for operator-facing and agent-facing access
+- should back both CLI-adjacent automation and the Next.js operator console with the same job/session contract
 - should expose publish, session, job-status, and capability endpoints
 - should call the same publishing core used by the existing CLI
 

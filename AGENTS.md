@@ -26,7 +26,10 @@ The long-term product may expand to YouTube, TikTok, Facebook, Bilibili, Douyin,
 ## Operator Defaults
 
 - When the user asks to publish content, the first priority is always the repository's formal publishing program. Do not default to manual browser clicking or ad hoc AI-operated page interactions when the program path exists or should exist.
+- The current formal operator entry points are `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`, `npm run xhs:check`, `npm run xhs:login`, and `npm run api` (HTTP service; requires `MARKETING_FOX_API_TOKEN`).
+- The internal browser-based operator surface is the Next.js Web app (`npm run web:dev` for local development, `npm run start` after `npm run build` in deployment). It should drive the same HTTP API and publish core rather than introducing a separate publish path.
 - The current formal operator entry points are `npm run dev -- publish <platform> <idea> [--mode=prepare|draft|publish]`, `npm run xhs:check`, `npm run xhs:login`, and `npm run api` (HTTP service; `GET /api/v1/health` is open for probes, all other routes require `MARKETING_FOX_API_TOKEN`).
+- The internal browser-based operator surface is the Next.js Web app (`npm run web:dev` for local development, `npm run start` after `npm run build` in deployment). It should drive the same HTTP API and publish core rather than introducing a separate publish path.
 - The HTTP service defaults to `127.0.0.1:3001`, stores job state under `MARKETING_FOX_DATA_DIR` (default `.local/service-data`), and marks in-flight jobs as `job_interrupted` if the service restarts before they finish.
 - Treat direct browser interaction as a debugging aid for repairing the formal publish path, not as the normal way to complete a publish request.
 - If the user provides final publish-ready content, preserve the original content by default instead of rewriting it.
@@ -48,6 +51,9 @@ The long-term product may expand to YouTube, TikTok, Facebook, Bilibili, Douyin,
 
 ## Initial Layout
 
-- `src/ts`: orchestration and connector contracts
+- `src/ts`: orchestration, CLI entry points, and HTTP service code
+- `src/app`: Next.js operator web routes
+- `src/components`: operator console and login UI
+- `src/lib`: browser-console client helpers
 - `src/python`: analytics and automation package
 - `docs`: scope, architecture, roadmap
