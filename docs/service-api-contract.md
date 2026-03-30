@@ -56,12 +56,14 @@ Versioning rule:
 
 The initial service model should use simple operator-focused authentication.
 
-Recommended v1 approach:
+Current v1 behavior:
 
 - bearer token authentication for server-to-server and automation clients
-- cookie-backed operator session for the Web console, backed by the same user identity model
+- cookie-backed operator session for the Web console, backed by the same operator identity model
 - `GET /api/v1/health` is intentionally unauthenticated so local probes and deploy checks can run before credentials are wired in
 - one initial admin/operator role
+- `MARKETING_FOX_OPERATOR_PASSWORD` configures the Web console password; when unset, the service falls back to `MARKETING_FOX_API_TOKEN`
+- `MARKETING_FOX_OPERATOR_COOKIE_NAME` configures the cookie name for the operator session; when unset, the default is `marketing_fox_operator_session`
 
 Request header:
 
@@ -72,7 +74,10 @@ Authorization: Bearer <token>
 Route rule:
 
 - `GET /api/v1/health` is intentionally unauthenticated for deploy and uptime checks
-- the other documented `/api/v1/*` routes currently require the bearer token
+- `/api/auth/login` accepts the operator password and establishes the cookie-backed operator session for the Web console
+- `/api/auth/session` checks whether the current bearer token or operator cookie is authenticated
+- `/api/auth/logout` clears the operator session cookie
+- the documented `/api/v1/*` routes require authentication, satisfied by either the bearer token or the operator session cookie
 
 Initial role model:
 
