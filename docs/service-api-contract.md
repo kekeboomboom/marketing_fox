@@ -489,16 +489,16 @@ Completion behavior:
 - when successful, the job `result` should contain the normalized session result with `action: "login"`
 - when unsuccessful, the job should fail with an explicit session or runtime error
 
-## `GET /api/v1/artifacts/{artifact_id}`
+## `GET /api/v1/jobs/{job_id}/artifacts/{artifact_id}`
 
 Purpose:
-Optional artifact retrieval endpoint for screenshots and exported publish artifacts.
+Retrieve a job-scoped artifact such as a screenshot or QR image.
 
-V1 recommendation:
+Current v1 behavior:
 
-- this endpoint is optional for the first implementation
-- returning stable artifact paths in job payloads is acceptable initially
-- if implemented, access must be authenticated
+- artifacts are addressed beneath the owning job resource
+- responses return the artifact bytes with the stored content type and filename when available
+- access is authenticated through the same operator bearer-token or cookie rules as the rest of `/api/v1/*`
 
 ## Error Semantics
 
@@ -531,7 +531,7 @@ The first implementation may omit full idempotency support.
 
 Recommended follow-up:
 
-- accept `Idempotency-Key` on `POST /publish`
+- accept `Idempotency-Key` on `POST /api/v1/publish`
 - deduplicate equivalent publish submissions within a short time window
 
 Until then, clients should assume repeated calls may create repeated jobs.
@@ -545,7 +545,7 @@ Recommended v1 shape:
 - API process validates and records the job
 - background worker executes the job
 - job state is stored in a persistent store
-- clients poll `GET /jobs/{id}` for completion
+- clients poll `GET /api/v1/jobs/{id}` for completion
 
 The first worker implementation can be simple. It does not need a distributed queue before the product actually needs one.
 
@@ -567,11 +567,11 @@ This API is intended to sit beneath both the Web console and OpenClaw integratio
 
 Expected mapping:
 
-- Web console create form calls `POST /publish`
-- Web console session widget calls `POST /xhs/session/check`
-- Web console re-login flow calls `POST /xhs/session/login-bootstrap`
-- OpenClaw skill calls `POST /publish` for `prepare`, `draft`, or `publish`
-- both channels poll `GET /jobs/{id}` for result
+- Web console create form calls `POST /api/v1/publish`
+- Web console session widget calls `POST /api/v1/xhs/session/check`
+- Web console re-login flow calls `POST /api/v1/xhs/session/login-bootstrap`
+- OpenClaw skill calls `POST /api/v1/publish` for `prepare`, `draft`, or `publish`
+- both channels poll `GET /api/v1/jobs/{id}` for result
 
 This keeps product entry points thin and consistent.
 
@@ -673,13 +673,13 @@ The Web page should remain a thin client of this API rather than embedding publi
 
 The recommended implementation order is:
 
-1. add `GET /health`
-2. add `GET /platforms`
-3. add `POST /publish`
-4. add `GET /jobs/{id}`
-5. add `POST /xhs/session/check`
-6. add `POST /xhs/session/login-bootstrap`
-7. add optional artifact retrieval
+1. add `GET /api/v1/health`
+2. add `GET /api/v1/platforms`
+3. add `POST /api/v1/publish`
+4. add `GET /api/v1/jobs/{id}`
+5. add `POST /api/v1/xhs/session/check`
+6. add `POST /api/v1/xhs/session/login-bootstrap`
+7. add optional authenticated artifact retrieval
 
 ## Related Docs
 
