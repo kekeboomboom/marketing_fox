@@ -51,7 +51,7 @@ Marketing Fox may study external projects when they provide useful patterns for 
 - `src/ts/agents/marketing-agent.ts`: top-level marketing agent definition
 - `src/ts/connectors/platform.ts`: platform connector contract
 - `src/ts/config/platforms.ts`: supported platform metadata
-- `src/ts/platform-adapters/`: adapters that translate Marketing Fox publish/session contracts to first-party connectors
+- `src/ts/publishing/`: current TypeScript-side publish and session runners that bridge the shared service contract into the Python publishing layer
 - `src/ts/publishing/python-runner.ts`: bridge into the Python publishing runner
 - `src/app/` and `src/components/`: internal Next.js operator console for login and Xiaohongshu job/session workflows
 
