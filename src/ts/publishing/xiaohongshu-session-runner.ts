@@ -1,7 +1,10 @@
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 
+import { createLogger, summarizeError } from "../logging/logger.js";
 import { buildPythonModuleCommand } from "./python-command.js";
+
+const logger = createLogger("xhs-session-runner");
 
 export interface XiaohongshuSessionError {
   code: string;
@@ -78,6 +81,14 @@ export function runXiaohongshuSessionAction(
   options: Record<string, unknown> = {}
 ): XiaohongshuSessionResult {
   const command = buildXiaohongshuSessionCommand();
+  const startedAt = Date.now();
+  logger.info("xhs_session_spawn_sync", {
+    action,
+    cwd: command.cwd,
+    executable: command.command,
+    args: command.args,
+    options_keys: Object.keys(options).sort()
+  });
   const result = spawnSync(command.command, command.args, {
     cwd: command.cwd,
     env: command.env,
@@ -86,13 +97,29 @@ export function runXiaohongshuSessionAction(
   });
 
   if (result.error) {
+    logger.error("xhs_session_spawn_sync_error", {
+      action,
+      duration_ms: Date.now() - startedAt,
+      ...summarizeError(result.error)
+    });
     throw result.error;
   }
 
   if (result.status !== 0) {
+    logger.error("xhs_session_nonzero_exit_sync", {
+      action,
+      exit_code: result.status,
+      duration_ms: Date.now() - startedAt,
+      stderr_preview: summarizeText(result.stderr)
+    });
     throw new Error(result.stderr || "Xiaohongshu session runner exited with a non-zero status.");
   }
 
+  logger.info("xhs_session_completed_sync", {
+    action,
+    duration_ms: Date.now() - startedAt,
+    stdout_bytes: result.stdout.length
+  });
   return JSON.parse(result.stdout) as XiaohongshuSessionResult;
 }
 
@@ -111,6 +138,14 @@ export async function runJsonCommandWithProgress<T>(
   runOptions: XiaohongshuSessionRunOptions = {}
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
+    const startedAt = Date.now();
+    logger.info("xhs_session_spawn", {
+      action: summarizeAction(payload),
+      cwd: command.cwd,
+      executable: command.command,
+      args: command.args,
+      options_keys: summarizeOptionsKeys(payload)
+    });
     const child = spawn(command.command, command.args, {
       cwd: command.cwd,
       env: command.env,
@@ -139,6 +174,11 @@ export async function runJsonCommandWithProgress<T>(
       if (pollTimer) {
         clearInterval(pollTimer);
       }
+      logger.error("xhs_session_spawn_error", {
+        action: summarizeAction(payload),
+        duration_ms: Date.now() - startedAt,
+        ...summarizeError(error)
+      });
       reject(error);
     });
     child.on("close", (code) => {
@@ -151,13 +191,33 @@ export async function runJsonCommandWithProgress<T>(
         }, () => lastProgressRaw);
       }
       if (code !== 0) {
+        logger.error("xhs_session_nonzero_exit", {
+          action: summarizeAction(payload),
+          duration_ms: Date.now() - startedAt,
+          exit_code: code,
+          stderr_preview: summarizeText(stderr)
+        });
         reject(new Error(stderr || "Xiaohongshu session runner exited with a non-zero status."));
         return;
       }
 
       try {
-        resolve(JSON.parse(stdout) as T);
+        const parsed = JSON.parse(stdout) as T;
+        logger.info("xhs_session_completed", {
+          action: summarizeAction(payload),
+          duration_ms: Date.now() - startedAt,
+          stdout_bytes: stdout.length,
+          stderr_bytes: stderr.length
+        });
+        resolve(parsed);
       } catch (error) {
+        logger.error("xhs_session_parse_failed", {
+          action: summarizeAction(payload),
+          duration_ms: Date.now() - startedAt,
+          stdout_preview: summarizeText(stdout),
+          stderr_preview: summarizeText(stderr),
+          ...summarizeError(error)
+        });
         reject(error);
       }
     });
@@ -188,4 +248,40 @@ function readProgressFromFile(
   } catch {
     // Ignore transient read/parse failures while the writer swaps temp files.
   }
+}
+
+function summarizeAction(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+
+  return typeof (payload as Record<string, unknown>).action === "string"
+    ? ((payload as Record<string, unknown>).action as string)
+    : undefined;
+}
+
+function summarizeOptionsKeys(payload: unknown): string[] | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+
+  const options = (payload as Record<string, unknown>).options;
+  if (!options || typeof options !== "object") {
+    return undefined;
+  }
+
+  return Object.keys(options as Record<string, unknown>).sort();
+}
+
+function summarizeText(value: string | null | undefined, maxLength = 240): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const normalized = value.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return undefined;
+  }
+
+  return normalized.length <= maxLength ? normalized : `${normalized.slice(0, maxLength)}...`;
 }

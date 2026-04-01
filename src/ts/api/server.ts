@@ -1,5 +1,6 @@
 import http from "node:http";
 
+import { createLogger, summarizeError } from "../logging/logger.js";
 import { loadServiceConfig } from "./config.js";
 import { authenticateActor } from "./auth.js";
 import { badRequest, internalError, isApiError, notFound, unauthorized } from "./errors.js";
@@ -18,14 +19,34 @@ interface CreateServerOptions {
 }
 
 export function createMarketingFoxApiServer(options: CreateServerOptions = {}): http.Server {
+  const logger = createLogger("api-http");
   const config = options.config ?? loadServiceConfig();
   const store = options.store ?? new JobStore(config.dataDir);
-  store.recoverInterruptedJobs();
+  const recoveredJobCount = store.recoverInterruptedJobs();
+  if (recoveredJobCount > 0) {
+    logger.warn("recovered_interrupted_jobs", {
+      recovered_job_count: recoveredJobCount
+    });
+  }
   const adapters = options.adapters ?? createDefaultServiceAdapters();
   const runner = new JobRunner(store, adapters, config.logTailLimit, config.artifactsDir);
   const service = options.service ?? new MarketingFoxService(config, store, runner, adapters);
 
   return http.createServer((request, response) => {
+    const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
+    const startedAt = Date.now();
+    logger.info("request_started", {
+      method: request.method ?? "GET",
+      path: url.pathname
+    });
+    response.once("finish", () => {
+      logger.info("request_completed", {
+        method: request.method ?? "GET",
+        path: url.pathname,
+        status_code: response.statusCode,
+        duration_ms: Date.now() - startedAt
+      });
+    });
     void handleRequest(request, response, { config, service });
   });
 }
@@ -38,6 +59,7 @@ async function handleRequest(
     service: MarketingFoxService;
   }
 ): Promise<void> {
+  const logger = createLogger("api-http");
   try {
     const url = new URL(request.url ?? "/", `http://${request.headers.host ?? "127.0.0.1"}`);
     const method = request.method ?? "GET";
@@ -58,7 +80,13 @@ async function handleRequest(
           `${context.config.operatorCookieName}=${encodeURIComponent(context.config.operatorPassword)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}`
         );
         sendJson(response, 200, { authenticated: true });
+        logger.info("operator_login_succeeded", {
+          path: url.pathname
+        });
       } else {
+        logger.warn("operator_login_failed", {
+          path: url.pathname
+        });
         throw unauthorized("Invalid password.");
       }
       return;
@@ -94,6 +122,10 @@ async function handleRequest(
     });
 
     if (!actor) {
+      logger.warn("request_unauthorized", {
+        method,
+        path: url.pathname
+      });
       throw unauthorized("Missing or invalid bearer token.");
     }
 
@@ -161,10 +193,22 @@ async function handleRequest(
     throw notFound("not_found", "The requested route does not exist.");
   } catch (error) {
     if (isApiError(error)) {
+      logger.warn("request_failed", {
+        method: request.method ?? "GET",
+        path: request.url ?? "/",
+        status_code: error.statusCode,
+        error_code: error.payload.code,
+        error_message: error.payload.message
+      });
       sendError(response, error.statusCode, error.payload);
       return;
     }
 
+    logger.error("request_crashed", {
+      method: request.method ?? "GET",
+      path: request.url ?? "/",
+      ...summarizeError(error)
+    });
     const normalized = internalError(error);
     sendError(response, normalized.statusCode, normalized.payload);
   }

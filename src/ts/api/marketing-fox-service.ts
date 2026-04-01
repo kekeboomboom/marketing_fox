@@ -1,4 +1,5 @@
 import { supportedPlatforms } from "../config/platforms.js";
+import { createLogger, summarizeError } from "../logging/logger.js";
 import { JobRunner, type ServiceAdapters } from "./job-runner.js";
 import { JobStore } from "./job-store.js";
 import { badRequest, conflict, notFound, unauthorized } from "./errors.js";
@@ -13,6 +14,8 @@ import type {
 } from "./types.js";
 
 export class MarketingFoxService {
+  private readonly logger = createLogger("marketing-fox-service");
+
   constructor(
     private readonly config: ServiceConfig,
     private readonly store: JobStore,
@@ -55,10 +58,26 @@ export class MarketingFoxService {
     this.requireActor(actor);
     const intent = validatePublishIntent(payload, forcedMode);
     const lockKey = intent.platform === "xiaohongshu" ? "xhs_profile_default" : null;
+    this.logger.info("publish_job_enqueue_requested", {
+      actor_kind: actor.kind,
+      actor_subject: actor.subject,
+      platform: intent.platform,
+      mode: intent.mode,
+      assets_count: intent.assets?.length ?? 0,
+      source_idea_length: intent.source_idea.length,
+      has_options: Object.keys(intent.options ?? {}).length > 0,
+      lock_key: lockKey
+    });
 
     if (lockKey) {
       const activeJob = this.store.findActiveJobByLock(lockKey);
       if (activeJob) {
+        this.logger.warn("publish_job_conflict", {
+          platform: intent.platform,
+          mode: intent.mode,
+          lock_key: lockKey,
+          active_job_id: activeJob.id
+        });
         throw conflict(
           "job_conflict",
           "A Xiaohongshu job is already active for this profile.",
@@ -73,6 +92,12 @@ export class MarketingFoxService {
         lockKey
       });
     } catch (error) {
+      this.logger.error("publish_job_enqueue_failed", {
+        platform: intent.platform,
+        mode: intent.mode,
+        lock_key: lockKey,
+        ...summarizeError(error)
+      });
       if (lockKey) {
         const active = this.store.findActiveJobByLock(lockKey);
         if (active) {
@@ -85,6 +110,12 @@ export class MarketingFoxService {
       }
       throw error;
     }
+    this.logger.info("publish_job_enqueued", {
+      job_id: job.id,
+      platform: intent.platform,
+      mode: intent.mode,
+      lock_key: lockKey
+    });
     return { job };
   }
 
@@ -134,7 +165,23 @@ export class MarketingFoxService {
   ): Promise<{ session: Awaited<ReturnType<ServiceAdapters["checkXiaohongshuSession"]>>; statusCode: number }> {
     this.requireActor(actor);
     const options = validateOptionsObject(payload.options);
+    const startedAt = Date.now();
+    this.logger.info("xhs_session_check_started", {
+      actor_kind: actor.kind,
+      actor_subject: actor.subject,
+      options_keys: Object.keys(options).sort()
+    });
     const session = await this.adapters.checkXiaohongshuSession(options);
+    this.logger.info("xhs_session_check_completed", {
+      actor_kind: actor.kind,
+      actor_subject: actor.subject,
+      status: session.status,
+      logged_in: session.logged_in,
+      duration_ms: Date.now() - startedAt,
+      screenshot_count: session.screenshots.length,
+      log_count: session.logs.length,
+      error_code: session.error?.code
+    });
     return {
       session,
       statusCode: session.error?.code === "missing_dependency" ? 503 : 200
@@ -150,12 +197,25 @@ export class MarketingFoxService {
     const lockKey = "xhs_profile_default";
     const activeJob = this.store.findActiveJobByLock(lockKey);
     if (activeJob && activeJob.kind === "xhs_session_login") {
+      this.logger.info("xhs_login_job_reused", {
+        actor_kind: actor.kind,
+        actor_subject: actor.subject,
+        job_id: activeJob.id,
+        lock_key: lockKey
+      });
       return {
         job: activeJob,
         reused: true
       };
     }
     if (activeJob) {
+      this.logger.warn("xhs_login_job_conflict", {
+        actor_kind: actor.kind,
+        actor_subject: actor.subject,
+        active_job_id: activeJob.id,
+        active_job_kind: activeJob.kind,
+        lock_key: lockKey
+      });
       throw conflict(
         "job_conflict",
         "A Xiaohongshu publish job is already active for this profile.",
@@ -164,11 +224,25 @@ export class MarketingFoxService {
     }
 
     try {
+      const job = this.runner.enqueueXiaohongshuLogin(options, { lockKey });
+      this.logger.info("xhs_login_job_enqueued", {
+        actor_kind: actor.kind,
+        actor_subject: actor.subject,
+        job_id: job.id,
+        lock_key: lockKey,
+        options_keys: Object.keys(options).sort()
+      });
       return {
-        job: this.runner.enqueueXiaohongshuLogin(options, { lockKey }),
+        job,
         reused: false
       };
     } catch (error) {
+      this.logger.error("xhs_login_job_enqueue_failed", {
+        actor_kind: actor.kind,
+        actor_subject: actor.subject,
+        lock_key: lockKey,
+        ...summarizeError(error)
+      });
       const active = this.store.findActiveJobByLock(lockKey);
       if (active && active.kind === "xhs_session_login") {
         return {

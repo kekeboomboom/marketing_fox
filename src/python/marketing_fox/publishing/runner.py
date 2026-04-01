@@ -24,7 +24,7 @@ def run_publish(payload: dict[str, object]) -> dict[str, object]:
             mode=mode,
             status="failed",
             draft_artifact=DraftArtifact(platform=platform),
-            logs=[],
+            logs=[f"Rejected publish payload during validation: {error}"],
             screenshots=[],
             error=PublishError(code="invalid_request", message=str(error)),
         )

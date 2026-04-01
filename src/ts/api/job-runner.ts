@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 
+import { createLogger, summarizeError } from "../logging/logger.js";
 import type { PublishIntent, PublishResult } from "../publishing/types.js";
 import {
   runPublishIntentAsync
@@ -38,6 +39,8 @@ export function createDefaultServiceAdapters(): ServiceAdapters {
 }
 
 export class JobRunner {
+  private readonly logger = createLogger("job-runner");
+
   constructor(
     private readonly store: JobStore,
     private readonly adapters: ServiceAdapters,
@@ -94,6 +97,14 @@ export class JobRunner {
   }
 
   private async runPublishJob(jobId: string, intent: PublishIntent): Promise<void> {
+    const startedAt = Date.now();
+    this.logger.info("publish_job_started", {
+      job_id: jobId,
+      platform: intent.platform,
+      mode: intent.mode,
+      assets_count: intent.assets?.length ?? 0,
+      has_options: Object.keys(intent.options ?? {}).length > 0
+    });
     this.store.setRunning(jobId);
 
     try {
@@ -101,11 +112,30 @@ export class JobRunner {
       const preflightArtifacts: JobArtifact[] = [];
 
       if (intent.platform === "xiaohongshu") {
+        this.logger.info("publish_job_preflight_session_started", {
+          job_id: jobId,
+          platform: intent.platform
+        });
         const session = await this.adapters.checkXiaohongshuSession(intent.options);
         preflightLogs.push(...session.logs);
         preflightArtifacts.push(...artifactsFromScreenshots(session.screenshots, this.artifactsDir));
+        this.logger.info("publish_job_preflight_session_completed", {
+          job_id: jobId,
+          platform: intent.platform,
+          session_status: session.status,
+          logged_in: session.logged_in,
+          screenshot_count: session.screenshots.length,
+          log_count: session.logs.length,
+          error_code: session.error?.code
+        });
 
         if (!session.logged_in || session.status !== "logged_in") {
+          this.logger.warn("publish_job_preflight_session_failed", {
+            job_id: jobId,
+            platform: intent.platform,
+            session_status: session.status,
+            error_code: session.error?.code
+          });
           this.store.setFailed(jobId, {
             error: normalizeError(
               session.error ?? {
@@ -124,8 +154,26 @@ export class JobRunner {
       const result = await this.adapters.runPublishIntent(intent);
       const artifacts = [...preflightArtifacts, ...artifactsFromScreenshots(result.screenshots, this.artifactsDir)];
       const logsTail = trimLogs([...preflightLogs, ...result.logs], this.logTailLimit);
+      this.logger.info("publish_job_runner_completed", {
+        job_id: jobId,
+        platform: intent.platform,
+        mode: intent.mode,
+        result_status: result.status,
+        screenshot_count: result.screenshots.length,
+        log_count: result.logs.length,
+        duration_ms: Date.now() - startedAt,
+        error_code: result.error?.code
+      });
 
       if (result.status === "failed") {
+        this.logger.warn("publish_job_failed", {
+          job_id: jobId,
+          platform: intent.platform,
+          mode: intent.mode,
+          duration_ms: Date.now() - startedAt,
+          error_code: result.error?.code,
+          error_message: result.error?.message
+        });
         this.store.setFailed(jobId, {
           error: normalizeError(
             result.error ?? {
@@ -140,12 +188,27 @@ export class JobRunner {
         return;
       }
 
+      this.logger.info("publish_job_succeeded", {
+        job_id: jobId,
+        platform: intent.platform,
+        mode: intent.mode,
+        final_status: result.status,
+        duration_ms: Date.now() - startedAt,
+        artifact_count: artifacts.length
+      });
       this.store.setSucceeded(jobId, {
         result,
         artifacts,
         logsTail
       });
     } catch (error) {
+      this.logger.error("publish_job_crashed", {
+        job_id: jobId,
+        platform: intent.platform,
+        mode: intent.mode,
+        duration_ms: Date.now() - startedAt,
+        ...summarizeError(error)
+      });
       this.store.setFailed(jobId, {
         error: normalizeThrownError(error),
         logsTail: trimLogs([String(error)], this.logTailLimit)
@@ -154,6 +217,7 @@ export class JobRunner {
   }
 
   private async runXiaohongshuLoginJob(jobId: string, options: Record<string, unknown>): Promise<void> {
+    const startedAt = Date.now();
     const runArtifactDir = path.join(this.artifactsDir, "xiaohongshu-session", jobId);
     fs.mkdirSync(runArtifactDir, { recursive: true });
     const progressFilePath = path.join(runArtifactDir, "progress.json");
@@ -163,6 +227,12 @@ export class JobRunner {
       xhs_session_progress_file: path.relative(process.cwd(), progressFilePath)
     };
     let liveArtifacts: JobArtifact[] = [];
+    let lastLoggedPhase: string | null = null;
+    this.logger.info("xhs_login_job_started", {
+      job_id: jobId,
+      artifact_dir: runArtifactDir,
+      options_keys: Object.keys(options).sort()
+    });
     this.store.setRunning(jobId, {
       progress: {
         phase: "starting",
@@ -179,6 +249,24 @@ export class JobRunner {
         onProgress: (progress) => {
           const progressArtifacts = artifactsFromProgress(progress, this.artifactsDir);
           liveArtifacts = mergeArtifacts(liveArtifacts, progressArtifacts);
+          if (progress.phase && progress.phase !== lastLoggedPhase) {
+            lastLoggedPhase = progress.phase;
+            this.logger.info("xhs_login_job_phase_changed", {
+              job_id: jobId,
+              phase: progress.phase,
+              state: progress.state,
+              status: progress.status,
+              logged_in: progress.logged_in
+            });
+          }
+          if (progress.error) {
+            this.logger.warn("xhs_login_job_progress_error", {
+              job_id: jobId,
+              phase: progress.phase,
+              error_code: progress.error.code,
+              error_message: progress.error.message
+            });
+          }
           this.store.updateRunning(jobId, {
             artifacts: liveArtifacts,
             logsTail: trimLogs(progress.logs_tail ?? [], this.logTailLimit),
@@ -188,8 +276,25 @@ export class JobRunner {
       });
       const artifacts = mergeArtifacts(liveArtifacts, artifactsFromScreenshots(result.screenshots, this.artifactsDir));
       const logsTail = trimLogs(result.logs, this.logTailLimit);
+      this.logger.info("xhs_login_job_runner_completed", {
+        job_id: jobId,
+        status: result.status,
+        logged_in: result.logged_in,
+        duration_ms: Date.now() - startedAt,
+        screenshot_count: result.screenshots.length,
+        log_count: result.logs.length,
+        artifact_count: artifacts.length,
+        error_code: result.error?.code
+      });
 
       if (result.status !== "logged_in") {
+        this.logger.warn("xhs_login_job_failed", {
+          job_id: jobId,
+          status: result.status,
+          duration_ms: Date.now() - startedAt,
+          error_code: result.error?.code,
+          error_message: result.error?.message
+        });
         this.store.setFailed(jobId, {
           error: normalizeError(
             result.error ?? {
@@ -210,6 +315,11 @@ export class JobRunner {
         return;
       }
 
+      this.logger.info("xhs_login_job_succeeded", {
+        job_id: jobId,
+        duration_ms: Date.now() - startedAt,
+        artifact_count: artifacts.length
+      });
       this.store.setSucceeded(jobId, {
         result,
         artifacts,
@@ -222,6 +332,11 @@ export class JobRunner {
         }
       });
     } catch (error) {
+      this.logger.error("xhs_login_job_crashed", {
+        job_id: jobId,
+        duration_ms: Date.now() - startedAt,
+        ...summarizeError(error)
+      });
       this.store.setFailed(jobId, {
         error: normalizeThrownError(error),
         logsTail: trimLogs([String(error)], this.logTailLimit),
