@@ -10,6 +10,11 @@ interface Logger {
   error(event: string, fields?: LogFields): void;
 }
 
+export interface JsonLineEnvelope {
+  event: string;
+  [key: string]: unknown;
+}
+
 export function createLogger(component: string): Logger {
   return {
     info: (event, fields) => writeLog("info", component, event, fields),
@@ -30,6 +35,10 @@ export function summarizeError(error: unknown): LogFields {
   return {
     error_message: String(error)
   };
+}
+
+export function writeJsonLine(payload: JsonLineEnvelope): void {
+  process.stdout.write(`${JSON.stringify(normalizeValue(payload))}\n`);
 }
 
 function writeLog(level: LogLevel, component: string, event: string, fields: LogFields = {}): void {

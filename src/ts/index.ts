@@ -1,7 +1,7 @@
 import { MarketingAgent } from "./agents/marketing-agent.js";
 import { supportedPlatforms } from "./config/platforms.js";
 import type { PlatformId, PublishMode } from "./connectors/platform.js";
-import { createLogger, summarizeError } from "./logging/logger.js";
+import { createLogger, summarizeError, writeJsonLine } from "./logging/logger.js";
 import { runXiaohongshuSessionAction } from "./publishing/xiaohongshu-session-runner.js";
 
 const agent = new MarketingAgent();
@@ -23,9 +23,15 @@ if (command === "publish") {
   const contentParts = rest.filter((arg) => !arg.startsWith("--mode="));
   const idea = contentParts.join(" ").trim();
   if (!isPlatformId(platform) || !idea) {
-    console.error(
-      "Usage: npm run dev -- publish <x|xiaohongshu|wechat_official_account> <idea> [--mode=prepare|draft|publish]"
-    );
+    logger.error("publish_command_invalid_usage", {
+      received_platform: platform,
+      received_arguments: rest
+    });
+    writeJsonLine({
+      event: "command_usage",
+      command: "publish",
+      usage: "npm run dev -- publish <x|xiaohongshu|wechat_official_account> <idea> [--mode=prepare|draft|publish]"
+    });
     process.exit(1);
   }
 
@@ -43,7 +49,10 @@ if (command === "publish") {
       status: result.status,
       duration_ms: Date.now() - startedAt
     });
-    console.log(JSON.stringify(result, null, 2));
+    writeJsonLine({
+      event: "publish_command_result",
+      ...result
+    });
   } catch (error) {
     logger.error("publish_command_failed", {
       platform,
@@ -63,7 +72,10 @@ if (command === "publish") {
       logged_in: result.logged_in,
       duration_ms: Date.now() - startedAt
     });
-    console.log(JSON.stringify(result, null, 2));
+    writeJsonLine({
+      event: "xhs_login_command_result",
+      ...result
+    });
   } catch (error) {
     logger.error("xhs_login_command_failed", {
       duration_ms: Date.now() - startedAt,
@@ -81,7 +93,10 @@ if (command === "publish") {
       logged_in: result.logged_in,
       duration_ms: Date.now() - startedAt
     });
-    console.log(JSON.stringify(result, null, 2));
+    writeJsonLine({
+      event: "xhs_check_command_result",
+      ...result
+    });
   } catch (error) {
     logger.error("xhs_check_command_failed", {
       duration_ms: Date.now() - startedAt,
@@ -90,8 +105,9 @@ if (command === "publish") {
     throw error;
   }
 } else {
-  console.log(agent.describe());
-  for (const summary of agent.listPlatformSummaries()) {
-    console.log(`- ${summary}`);
-  }
+  writeJsonLine({
+    event: "agent_summary",
+    description: agent.describe(),
+    platform_summaries: agent.listPlatformSummaries()
+  });
 }

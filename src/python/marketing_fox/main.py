@@ -1,11 +1,20 @@
+import json
+
 from marketing_fox.agent import MarketingFoxAgent
 
 
 def main() -> None:
     agent = MarketingFoxAgent()
-    print(agent.describe())
-    for summary in agent.platform_summaries():
-        print(f"- {summary}")
+    print(
+        json.dumps(
+            {
+                "event": "agent_summary",
+                "description": agent.describe(),
+                "platform_summaries": list(agent.platform_summaries()),
+            },
+            ensure_ascii=False,
+        )
+    )
 
 
 if __name__ == "__main__":
