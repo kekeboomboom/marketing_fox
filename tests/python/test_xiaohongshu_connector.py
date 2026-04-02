@@ -1,7 +1,11 @@
 from pathlib import Path
+from contextlib import contextmanager
 
+import marketing_fox.publishing.connectors.xiaohongshu_connector as xiaohongshu_connector_module
 from marketing_fox.publishing.connectors.xiaohongshu_connector import (
+    XiaohongshuConnector,
     _build_text_image_note_text,
+    _clear_stale_profile_singleton,
     _capture_login_surface_artifact,
     _detect_login_surface,
     _looks_logged_out,
@@ -9,6 +13,7 @@ from marketing_fox.publishing.connectors.xiaohongshu_connector import (
     _resolve_playwright_browsers_path,
     _resolve_note_image_assets,
 )
+from marketing_fox.publishing.connectors.xiaohongshu_profile_lock import XiaohongshuProfileBusyError, XiaohongshuProfileLease
 from marketing_fox.publishing.models import DraftArtifact, PublishIntent, RunContext
 
 
@@ -265,3 +270,54 @@ def test_resolve_playwright_browsers_path_ignores_cursor_sandbox_path(tmp_path) 
     )
 
     assert resolved == expected_cache_dir
+
+
+def test_clear_stale_profile_singleton_removes_orphaned_lock_files(tmp_path: Path) -> None:
+    profile_dir = tmp_path / "xhs-profile"
+    profile_dir.mkdir()
+    (profile_dir / "SingletonLock").symlink_to("old-container-4843")
+    (profile_dir / "SingletonCookie").symlink_to("cookie-target")
+    (profile_dir / "SingletonSocket").symlink_to("/tmp/org.chromium.Chromium.dead/SingletonSocket")
+
+    changed = _clear_stale_profile_singleton(profile_dir)
+
+    assert changed is True
+    assert not (profile_dir / "SingletonLock").exists()
+    assert not (profile_dir / "SingletonCookie").exists()
+    assert not (profile_dir / "SingletonSocket").exists()
+
+
+def test_xiaohongshu_connector_returns_profile_busy_when_profile_lease_is_held(tmp_path, monkeypatch) -> None:
+    intent = PublishIntent(
+        platform="xiaohongshu",
+        source_idea="发布图文",
+        mode="publish",
+        options={"xhs_profile_dir": str(tmp_path / "xhs-profile")},
+    )
+    draft = DraftArtifact(platform="xiaohongshu", title="标题", body="正文")
+    context = RunContext(artifact_dir=tmp_path / "artifacts")
+    context.artifact_dir.mkdir(parents=True, exist_ok=True)
+    connector = XiaohongshuConnector(playwright_module=lambda: None)
+
+    @contextmanager
+    def raise_busy(_profile_dir: Path, _action: str):
+        lease = XiaohongshuProfileLease(
+            profile_dir=tmp_path / "xhs-profile",
+            lock_path=tmp_path / "xhs-profile" / ".marketing_fox_profile.lock",
+            action="publish",
+            holder_host="busy-host",
+            holder_pid=2468,
+            current_host="current-host",
+            current_pid=1357,
+        )
+        raise XiaohongshuProfileBusyError(lease)
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(xiaohongshu_connector_module, "acquire_xiaohongshu_profile_lease", raise_busy)
+
+    result = connector.execute(intent, draft, context)
+
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "profile_busy"
+    assert any("lease_lock_path=" in line for line in result.logs)

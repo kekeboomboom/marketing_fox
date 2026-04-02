@@ -125,3 +125,88 @@ Operational risks:
 - `XHS_BROWSER_CACHE_DIR` is pinned to `/ms-playwright` inside the API image. If you later move that to a mounted volume, keep the browser cache path explicit and ensure Chromium is installed there.
 - Nginx must own the public domain. Do not expose the Web or API container ports directly on non-localhost interfaces.
 - The host `.env.test` must point `MARKETING_FOX_API_IMAGE` and `MARKETING_FOX_WEB_IMAGE` at the published GHCR tags. The default examples use placeholders and should be replaced before deploy.
+
+## Querying Test SLS Logs
+
+When querying `marketing_fox` test logs from a local Codex session, use the shared global skill `aliyun-sls-test-logs` rather than adding repo-specific logic to the skill itself.
+
+Resolved values verified on April 2, 2026:
+
+- SLS project: `marketing-fox`
+- SLS logstore: `marketing-fox`
+- region: `ap-southeast-1`
+
+Important note:
+
+- The shared helper's global default logstore is currently `getoutvideo-test`.
+- That default does not apply to this repo.
+- For `marketing_fox`, pass both `--project marketing-fox` and `--logstore marketing-fox` explicitly.
+
+Preferred workflow:
+
+1. Run `doctor` first to confirm SDK access, credentials, and project reachability.
+2. Run `raw-search --query "*"` to confirm recent log flow and inspect raw fields.
+3. Run `recent-errors` for a heuristic error summary.
+4. Widen the time window or add a more specific query only after direct access is confirmed.
+
+Canonical commands:
+
+```bash
+uv run --with aliyun-log-python-sdk python3 /Users/keboom/.codex/skills/aliyun-sls-test-logs/scripts/query_aliyun_sls_test.py --sdk-timeout 15 --project marketing-fox --logstore marketing-fox doctor
+
+uv run --with aliyun-log-python-sdk python3 /Users/keboom/.codex/skills/aliyun-sls-test-logs/scripts/query_aliyun_sls_test.py --sdk-timeout 15 --project marketing-fox --logstore marketing-fox raw-search --query "*" --minutes 60 --limit 20 --output raw
+
+uv run --with aliyun-log-python-sdk python3 /Users/keboom/.codex/skills/aliyun-sls-test-logs/scripts/query_aliyun_sls_test.py --sdk-timeout 15 --project marketing-fox --logstore marketing-fox recent-errors --minutes 1440 --limit 200 --output summary
+```
+
+Observed baseline from the April 2, 2026 verification:
+
+- direct SDK access succeeded
+- recent logs came from container `marketing_fox-test-api-1`
+- recent samples were structured JSON request logs for `GET /api/v1/health`
+- no heuristic error matches were found in the last 24 hours
+
+## Xiaohongshu `SingletonLock` Remediation
+
+If the test API logs show `ProcessSingleton` or `SingletonLock` errors for
+`/data/marketing_fox/xhs-profile`, treat it as a live profile conflict first,
+not as a login-expired incident.
+
+Recommended host-side recovery sequence:
+
+1. Confirm only one API container is running:
+
+```bash
+cd /srv/marketing_fox-test
+docker compose --env-file .env.test -f compose.test.yml ps
+```
+
+2. Inspect Chromium processes and the profile lock files:
+
+```bash
+docker exec marketing_fox-test-api-1 pgrep -af 'chrome|chromium'
+ls -l /srv/marketing_fox-test/runtime/xhs-profile/Singleton*
+```
+
+3. If an unexpected Chromium process is still alive, stop that process first.
+Only after the process is gone, remove `SingletonLock`, `SingletonCookie`, and
+`SingletonSocket` if they remain.
+
+4. Re-run health and one formal session check before generating a new QR code:
+
+```bash
+curl -sS http://127.0.0.1:20001/api/v1/health
+curl -sS -X POST http://127.0.0.1:20001/api/v1/xhs/session/check \
+  -H "Authorization: Bearer ${MARKETING_FOX_API_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+5. Only if the session check returns `login_required`, start
+`/api/v1/xhs/session/login-bootstrap`.
+
+Operator rules while debugging this incident class:
+
+- Do not click `重新检查` while a Xiaohongshu login or publish job is active.
+- Do not run `npm run xhs:check`, `npm run xhs:login`, and the Web login flow at the same time.
+- Do not manually open another Chromium process against `/data/marketing_fox/xhs-profile`.

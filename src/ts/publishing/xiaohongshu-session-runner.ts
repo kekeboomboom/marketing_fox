@@ -118,9 +118,12 @@ export function runXiaohongshuSessionAction(
   logger.info("xhs_session_completed_sync", {
     action,
     duration_ms: Date.now() - startedAt,
-    stdout_bytes: result.stdout.length
+    stdout_bytes: result.stdout.length,
+    stderr_bytes: result.stderr.length
   });
-  return JSON.parse(result.stdout) as XiaohongshuSessionResult;
+  const parsed = JSON.parse(result.stdout) as XiaohongshuSessionResult;
+  logSessionResultOutcome("xhs_session_result_sync", action, parsed, result.stderr);
+  return parsed;
 }
 
 export async function runXiaohongshuSessionActionAsync(
@@ -209,6 +212,7 @@ export async function runJsonCommandWithProgress<T>(
           stdout_bytes: stdout.length,
           stderr_bytes: stderr.length
         });
+        logSessionResultOutcome("xhs_session_result", summarizeAction(payload), parsed, stderr);
         resolve(parsed);
       } catch (error) {
         logger.error("xhs_session_parse_failed", {
@@ -258,6 +262,62 @@ function summarizeAction(payload: unknown): string | undefined {
   return typeof (payload as Record<string, unknown>).action === "string"
     ? ((payload as Record<string, unknown>).action as string)
     : undefined;
+}
+
+function logSessionResultOutcome(event: string, action: string | undefined, parsed: unknown, stderr: string): void {
+  const summary = summarizeSessionResult(parsed);
+  if (!summary) {
+    return;
+  }
+
+  const fields = {
+    action,
+    status: summary.status,
+    logged_in: summary.loggedIn,
+    error_code: summary.errorCode,
+    error_message: summary.errorMessage,
+    artifact_dir: summary.artifactDir,
+    progress_file: summary.progressFile,
+    log_count: summary.logCount,
+    stderr_preview: summarizeText(stderr)
+  };
+
+  if (summary.status === "failed") {
+    logger.error(`${event}_failed`, fields);
+    return;
+  }
+
+  if (summary.errorCode) {
+    logger.warn(`${event}_warning`, fields);
+  }
+}
+
+function summarizeSessionResult(
+  parsed: unknown
+): {
+  status?: string;
+  loggedIn?: boolean;
+  errorCode?: string;
+  errorMessage?: string;
+  artifactDir?: string | null;
+  progressFile?: string | null;
+  logCount?: number;
+} | null {
+  if (!parsed || typeof parsed !== "object") {
+    return null;
+  }
+
+  const record = parsed as Record<string, unknown>;
+  const error = record.error && typeof record.error === "object" ? (record.error as Record<string, unknown>) : null;
+  return {
+    status: typeof record.status === "string" ? record.status : undefined,
+    loggedIn: typeof record.logged_in === "boolean" ? record.logged_in : undefined,
+    errorCode: error && typeof error.code === "string" ? error.code : undefined,
+    errorMessage: error && typeof error.message === "string" ? error.message : undefined,
+    artifactDir: typeof record.artifact_dir === "string" ? record.artifact_dir : undefined,
+    progressFile: typeof record.progress_file === "string" ? record.progress_file : undefined,
+    logCount: Array.isArray(record.logs) ? record.logs.length : undefined
+  };
 }
 
 function summarizeOptionsKeys(payload: unknown): string[] | undefined {

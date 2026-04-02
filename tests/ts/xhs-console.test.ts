@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { getTrackedJobId, hasJobReachedStatus } from "../../src/lib/xhs-console-state.js";
+import { getTrackedJobId, hasActiveXhsBrowserJob, hasJobReachedStatus } from "../../src/lib/xhs-console-state.js";
 
 test("getTrackedJobId only tracks active jobs", () => {
   assert.equal(getTrackedJobId(null), null);
@@ -17,4 +17,17 @@ test("hasJobReachedStatus only fires on the transition into a status", () => {
   assert.equal(hasJobReachedStatus("succeeded", "succeeded", "succeeded"), false);
   assert.equal(hasJobReachedStatus("failed", "succeeded", "succeeded"), true);
   assert.equal(hasJobReachedStatus("running", "running", "succeeded"), false);
+});
+
+test("hasActiveXhsBrowserJob detects active login or publish work", () => {
+  assert.equal(hasActiveXhsBrowserJob(null, null), false);
+  assert.equal(hasActiveXhsBrowserJob({ id: "job-login", status: "running" }, null), true);
+  assert.equal(hasActiveXhsBrowserJob(null, { id: "job-publish", status: "queued" }), true);
+  assert.equal(
+    hasActiveXhsBrowserJob(
+      { id: "job-login", status: "failed" },
+      { id: "job-publish", status: "succeeded" }
+    ),
+    false
+  );
 });

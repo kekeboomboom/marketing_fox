@@ -37,6 +37,7 @@ The long-term product may expand to YouTube, TikTok, Facebook, Bilibili, Douyin,
 - If the user asks to "publish" without extra qualifiers, treat it as a real publish request. Only stop at `prepare` or `draft` when the user explicitly asks for a dry run, review step, or stop-before-publish flow.
 - For browser-session platforms, run a programmatic session check before publish and return to the formal publish program after any required login bootstrap.
 - Inspect generated artifacts under `.artifacts/` before falling back to manual debugging. Publish runs write platform screenshots under `.artifacts/publishing/<platform>/...`, and Xiaohongshu session flows write evidence under `.artifacts/xiaohongshu-session/...`.
+- When asked to query `test` environment logs for this repo, use the shared global `aliyun-sls-test-logs` skill and the repo-local runbook in `docs/OPERATIONS-test.md`. For `marketing_fox`, explicitly pass `--project marketing-fox --logstore marketing-fox` instead of relying on the global default logstore.
 - When the user asks to "publish/post a Xiaohongshu note" without specifying a format, default to the current `图文` flow via `文字配图`.
 - The default Xiaohongshu publishing sequence is:
   1. Open `上传图文`

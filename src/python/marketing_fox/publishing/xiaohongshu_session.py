@@ -18,6 +18,11 @@ from .connectors.xiaohongshu_connector import (
     _resolve_browser_settings,
     _wait_for_publish_home,
 )
+from .connectors.xiaohongshu_profile_lock import (
+    acquire_xiaohongshu_profile_lease,
+    classify_xiaohongshu_profile_error,
+    clear_stale_profile_singleton,
+)
 
 SessionAction = Literal["check", "login"]
 SessionStatus = Literal["logged_in", "login_required", "failed"]
@@ -118,7 +123,15 @@ def run_xiaohongshu_session(payload: dict[str, Any]) -> dict[str, Any]:
     artifact_dir, progress_file = _resolve_session_paths(action, options)
     screenshots: list[str] = []
     artifacts: list[SessionArtifact] = []
-    logs: list[str] = [f"Using Xiaohongshu profile directory: {settings.profile_dir}"]
+    display_value = str(os.getenv("DISPLAY") or "").strip()
+    logs: list[str] = [
+        f"Using Xiaohongshu profile directory: {settings.profile_dir}",
+        "Resolved Xiaohongshu browser runtime: "
+        f"headless={settings.headless}, "
+        f"display={display_value or '<unset>'}, "
+        f"channel={settings.channel or '<default>'}, "
+        f"executable_path={settings.executable_path or '<bundled>'}",
+    ]
 
     timeout_ms = _resolve_login_timeout_ms(options)
     poll_interval_ms = _resolve_positive_int(options, "poll_interval_ms", DEFAULT_POLL_INTERVAL_MS)
@@ -214,151 +227,64 @@ def run_xiaohongshu_session(payload: dict[str, Any]) -> dict[str, Any]:
 
     publish_url = str(options.get("xhs_publish_url") or DEFAULT_URL)
 
+    if not settings.headless and not display_value:
+        missing_display_error = SessionError(
+            code="missing_display",
+            message=(
+                "DISPLAY is not set while Xiaohongshu session automation is running with headless=false. "
+                "Run the API through the Docker entrypoint or another Xvfb-backed display, provide a stable DISPLAY, "
+                "or set XHS_HEADLESS=true."
+            ),
+            retryable=True,
+        )
+        logs.append("Cannot launch a headed Xiaohongshu browser because DISPLAY is not set.")
+        write_progress(state="failed", phase="failed", status="failed", logged_in=False, error=missing_display_error)
+        return XiaohongshuSessionResult(
+            action=action,
+            status="failed",
+            logged_in=False,
+            profile_dir=str(settings.profile_dir),
+            artifact_dir=str(artifact_dir),
+            progress_file=str(progress_file),
+            screenshots=screenshots,
+            artifacts=artifacts,
+            logs=logs,
+            error=missing_display_error,
+        ).to_dict()
+
+    stale_lock_removed = False
     try:
-        with _override_playwright_browser_cache_dir(settings):
-            with sync_playwright() as playwright:
-                browser = playwright.chromium.launch_persistent_context(
-                    user_data_dir=str(settings.profile_dir),
-                    headless=settings.headless,
-                    executable_path=settings.executable_path,
-                    channel=settings.channel,
-                    locale=settings.locale,
-                    timezone_id=settings.timezone_id,
-                    args=settings.launch_args,
-                )
-                page = browser.new_page()
-
-                write_progress(phase="opening_publish_page")
-                page.goto(publish_url, wait_until="domcontentloaded")
-                _wait_for_publish_home(page)
-
-                write_progress(phase="capturing_initial_state", platform_url=page.url)
-                initial_path = artifact_dir / f"xiaohongshu-session-{action}-initial.png"
-                page.screenshot(path=str(initial_path), full_page=True)
-                screenshots.append(str(initial_path))
-                append_artifact("screenshot", "initial_page", initial_path, capture="full_page")
-                write_progress(platform_url=page.url)
-
-                login_surface = _detect_login_surface(page)
-                if not _looks_logged_out(page):
-                    logs.append("Xiaohongshu session is already valid.")
-                    write_progress(
-                        state="succeeded",
-                        phase="completed",
-                        status="logged_in",
-                        logged_in=True,
-                        platform_url=page.url,
-                        login_surface=login_surface,
+        with acquire_xiaohongshu_profile_lease(settings.profile_dir, action):
+            stale_lock_removed = clear_stale_profile_singleton(settings.profile_dir)
+            if stale_lock_removed:
+                logs.append("Removed a stale Chromium profile lock before launching Xiaohongshu.")
+            with _override_playwright_browser_cache_dir(settings):
+                with sync_playwright() as playwright:
+                    browser = playwright.chromium.launch_persistent_context(
+                        user_data_dir=str(settings.profile_dir),
+                        headless=settings.headless,
+                        executable_path=settings.executable_path,
+                        channel=settings.channel,
+                        locale=settings.locale,
+                        timezone_id=settings.timezone_id,
+                        args=settings.launch_args,
                     )
-                    result = XiaohongshuSessionResult(
-                        action=action,
-                        status="logged_in",
-                        logged_in=True,
-                        profile_dir=str(settings.profile_dir),
-                        artifact_dir=str(artifact_dir),
-                        progress_file=str(progress_file),
-                        platform_url=page.url,
-                        screenshots=screenshots,
-                        artifacts=artifacts,
-                        logs=logs,
-                    )
-                    browser.close()
-                    return result.to_dict()
+                    page = browser.new_page()
 
-                logs.append("Xiaohongshu session is not logged in.")
-                if action == "check":
-                    write_progress(
-                        state="failed",
-                        phase="completed",
-                        status="login_required",
-                        logged_in=False,
-                        platform_url=page.url,
-                        login_surface=login_surface,
-                    )
-                    result = XiaohongshuSessionResult(
-                        action=action,
-                        status="login_required",
-                        logged_in=False,
-                        profile_dir=str(settings.profile_dir),
-                        artifact_dir=str(artifact_dir),
-                        progress_file=str(progress_file),
-                        platform_url=page.url,
-                        screenshots=screenshots,
-                        artifacts=artifacts,
-                        logs=logs,
-                    )
-                    browser.close()
-                    return result.to_dict()
+                    write_progress(phase="opening_publish_page")
+                    page.goto(publish_url, wait_until="domcontentloaded")
+                    _wait_for_publish_home(page)
 
-                logs.append(f"Waiting up to {timeout_ms} ms for a manual login in the persistent browser profile.")
-                qr_switch_attempted = False
-                if login_surface["kind"] == "sms":
-                    qr_surface = _ensure_qr_login_surface(page, attempts=1)
-                    qr_switch_attempted = True
-                else:
-                    qr_surface = login_surface
-                if qr_surface["kind"] == "qr" or qr_surface["qr_visible"]:
-                    login_surface = qr_surface
-                    if qr_switch_attempted:
-                        logs.append("Switched the Xiaohongshu login page to QR-code mode.")
-                else:
-                    login_surface = qr_surface
+                    write_progress(phase="capturing_initial_state", platform_url=page.url)
+                    initial_path = artifact_dir / f"xiaohongshu-session-{action}-initial.png"
+                    page.screenshot(path=str(initial_path), full_page=True)
+                    screenshots.append(str(initial_path))
+                    append_artifact("screenshot", "initial_page", initial_path, capture="full_page")
+                    write_progress(platform_url=page.url)
 
-                login_page_path = artifact_dir / "xiaohongshu-session-login-page.png"
-                page.screenshot(path=str(login_page_path), full_page=True)
-                screenshots.append(str(login_page_path))
-                append_artifact("screenshot", "login_page", login_page_path, capture="full_page")
-
-                qr_path = artifact_dir / "xiaohongshu-session-login-qr.png"
-                qr_capture = _capture_login_surface_artifact(page, qr_path)
-                append_artifact(
-                    qr_capture.get("type", "screenshot"),
-                    "login_qr",
-                    Path(qr_capture.get("path", str(qr_path))),
-                    capture=str(qr_capture.get("capture")) if qr_capture.get("capture") else None,
-                    selector=str(qr_capture.get("selector")) if qr_capture.get("selector") else None,
-                )
-
-                deadline = datetime.now(UTC).timestamp() + (timeout_ms / 1000)
-                last_qr_capture_ts = datetime.now(UTC).timestamp()
-                last_reanchor_ts = datetime.now(UTC).timestamp()
-                ambiguous_since_ts: float | None = None
-                poll_count = 0
-
-                while datetime.now(UTC).timestamp() < deadline:
-                    poll_count += 1
                     login_surface = _detect_login_surface(page)
-                    if login_surface["kind"] == "sms" and not qr_switch_attempted:
-                        qr_surface = _ensure_qr_login_surface(page, attempts=1)
-                        qr_switch_attempted = True
-                        if qr_surface["kind"] == "qr" or qr_surface["qr_visible"]:
-                            login_surface = qr_surface
-                    logged_out = _looks_logged_out(page)
-
-                    phase: SessionPhase = "awaiting_qr_scan"
-                    if login_surface["kind"] in {"sms", "challenge"}:
-                        phase = "awaiting_sms_or_challenge"
-                    state: SessionState = "awaiting_login"
-                    if not logged_out:
-                        phase = "verifying_session"
-                        state = "running"
-
-                    write_progress(
-                        state=state,
-                        phase=phase,
-                        status=None,
-                        logged_in=False,
-                        platform_url=page.url,
-                        login_surface=login_surface,
-                        poll_count=poll_count,
-                    )
-
-                    if not logged_out:
-                        ready_path = artifact_dir / "xiaohongshu-session-login-ready.png"
-                        page.screenshot(path=str(ready_path), full_page=True)
-                        screenshots.append(str(ready_path))
-                        append_artifact("screenshot", "login_ready", ready_path, capture="full_page")
-                        logs.append("Detected a valid Xiaohongshu session in the persistent profile.")
+                    if not _looks_logged_out(page):
+                        logs.append("Xiaohongshu session is already valid.")
                         write_progress(
                             state="succeeded",
                             phase="completed",
@@ -366,7 +292,6 @@ def run_xiaohongshu_session(payload: dict[str, Any]) -> dict[str, Any]:
                             logged_in=True,
                             platform_url=page.url,
                             login_surface=login_surface,
-                            poll_count=poll_count,
                         )
                         result = XiaohongshuSessionResult(
                             action=action,
@@ -383,70 +308,196 @@ def run_xiaohongshu_session(payload: dict[str, Any]) -> dict[str, Any]:
                         browser.close()
                         return result.to_dict()
 
-                    now_ts = datetime.now(UTC).timestamp()
-                    if now_ts - last_qr_capture_ts >= (qr_refresh_interval_ms / 1000):
-                        qr_capture = _capture_login_surface_artifact(page, qr_path)
-                        append_artifact(
-                            qr_capture.get("type", "screenshot"),
-                            "login_qr_refresh",
-                            Path(qr_capture.get("path", str(qr_path))),
-                            capture=str(qr_capture.get("capture")) if qr_capture.get("capture") else None,
-                            selector=str(qr_capture.get("selector")) if qr_capture.get("selector") else None,
+                    logs.append("Xiaohongshu session is not logged in.")
+                    if action == "check":
+                        write_progress(
+                            state="failed",
+                            phase="completed",
+                            status="login_required",
+                            logged_in=False,
+                            platform_url=page.url,
+                            login_surface=login_surface,
                         )
-                        last_qr_capture_ts = now_ts
+                        result = XiaohongshuSessionResult(
+                            action=action,
+                            status="login_required",
+                            logged_in=False,
+                            profile_dir=str(settings.profile_dir),
+                            artifact_dir=str(artifact_dir),
+                            progress_file=str(progress_file),
+                            platform_url=page.url,
+                            screenshots=screenshots,
+                            artifacts=artifacts,
+                            logs=logs,
+                        )
+                        browser.close()
+                        return result.to_dict()
 
-                    if login_surface["kind"] in {"qr", "sms", "challenge"}:
-                        ambiguous_since_ts = None
+                    logs.append(f"Waiting up to {timeout_ms} ms for a manual login in the persistent browser profile.")
+                    qr_switch_attempted = False
+                    if login_surface["kind"] == "sms":
+                        qr_surface = _ensure_qr_login_surface(page, attempts=1)
+                        qr_switch_attempted = True
                     else:
-                        if ambiguous_since_ts is None:
-                            ambiguous_since_ts = now_ts
-                        reanchor_due = (now_ts - last_reanchor_ts) >= (reanchor_interval_ms / 1000)
-                        ambiguous_due = (now_ts - ambiguous_since_ts) >= (ambiguous_threshold_ms / 1000)
-                        if reanchor_due and ambiguous_due:
-                            logs.append("Login surface became ambiguous; refreshing the publish page.")
-                            page.goto(publish_url, wait_until="domcontentloaded")
-                            _wait_for_publish_home(page)
-                            last_reanchor_ts = now_ts
+                        qr_surface = login_surface
+                    if qr_surface["kind"] == "qr" or qr_surface["qr_visible"]:
+                        login_surface = qr_surface
+                        if qr_switch_attempted:
+                            logs.append("Switched the Xiaohongshu login page to QR-code mode.")
+                    else:
+                        login_surface = qr_surface
+
+                    login_page_path = artifact_dir / "xiaohongshu-session-login-page.png"
+                    page.screenshot(path=str(login_page_path), full_page=True)
+                    screenshots.append(str(login_page_path))
+                    append_artifact("screenshot", "login_page", login_page_path, capture="full_page")
+
+                    qr_path = artifact_dir / "xiaohongshu-session-login-qr.png"
+                    qr_capture = _capture_login_surface_artifact(page, qr_path)
+                    append_artifact(
+                        qr_capture.get("type", "screenshot"),
+                        "login_qr",
+                        Path(qr_capture.get("path", str(qr_path))),
+                        capture=str(qr_capture.get("capture")) if qr_capture.get("capture") else None,
+                        selector=str(qr_capture.get("selector")) if qr_capture.get("selector") else None,
+                    )
+
+                    deadline = datetime.now(UTC).timestamp() + (timeout_ms / 1000)
+                    last_qr_capture_ts = datetime.now(UTC).timestamp()
+                    last_reanchor_ts = datetime.now(UTC).timestamp()
+                    ambiguous_since_ts: float | None = None
+                    poll_count = 0
+
+                    while datetime.now(UTC).timestamp() < deadline:
+                        poll_count += 1
+                        login_surface = _detect_login_surface(page)
+                        if login_surface["kind"] == "sms" and not qr_switch_attempted:
+                            qr_surface = _ensure_qr_login_surface(page, attempts=1)
+                            qr_switch_attempted = True
+                            if qr_surface["kind"] == "qr" or qr_surface["qr_visible"]:
+                                login_surface = qr_surface
+                        logged_out = _looks_logged_out(page)
+
+                        phase: SessionPhase = "awaiting_qr_scan"
+                        if login_surface["kind"] in {"sms", "challenge"}:
+                            phase = "awaiting_sms_or_challenge"
+                        state: SessionState = "awaiting_login"
+                        if not logged_out:
+                            phase = "verifying_session"
+                            state = "running"
+
+                        write_progress(
+                            state=state,
+                            phase=phase,
+                            status=None,
+                            logged_in=False,
+                            platform_url=page.url,
+                            login_surface=login_surface,
+                            poll_count=poll_count,
+                        )
+
+                        if not logged_out:
+                            ready_path = artifact_dir / "xiaohongshu-session-login-ready.png"
+                            page.screenshot(path=str(ready_path), full_page=True)
+                            screenshots.append(str(ready_path))
+                            append_artifact("screenshot", "login_ready", ready_path, capture="full_page")
+                            logs.append("Detected a valid Xiaohongshu session in the persistent profile.")
+                            write_progress(
+                                state="succeeded",
+                                phase="completed",
+                                status="logged_in",
+                                logged_in=True,
+                                platform_url=page.url,
+                                login_surface=login_surface,
+                                poll_count=poll_count,
+                            )
+                            result = XiaohongshuSessionResult(
+                                action=action,
+                                status="logged_in",
+                                logged_in=True,
+                                profile_dir=str(settings.profile_dir),
+                                artifact_dir=str(artifact_dir),
+                                progress_file=str(progress_file),
+                                platform_url=page.url,
+                                screenshots=screenshots,
+                                artifacts=artifacts,
+                                logs=logs,
+                            )
+                            browser.close()
+                            return result.to_dict()
+
+                        now_ts = datetime.now(UTC).timestamp()
+                        if now_ts - last_qr_capture_ts >= (qr_refresh_interval_ms / 1000):
+                            qr_capture = _capture_login_surface_artifact(page, qr_path)
+                            append_artifact(
+                                qr_capture.get("type", "screenshot"),
+                                "login_qr_refresh",
+                                Path(qr_capture.get("path", str(qr_path))),
+                                capture=str(qr_capture.get("capture")) if qr_capture.get("capture") else None,
+                                selector=str(qr_capture.get("selector")) if qr_capture.get("selector") else None,
+                            )
+                            last_qr_capture_ts = now_ts
+
+                        if login_surface["kind"] in {"qr", "sms", "challenge"}:
                             ambiguous_since_ts = None
-                            qr_switch_attempted = False
-                            continue
+                        else:
+                            if ambiguous_since_ts is None:
+                                ambiguous_since_ts = now_ts
+                            reanchor_due = (now_ts - last_reanchor_ts) >= (reanchor_interval_ms / 1000)
+                            ambiguous_due = (now_ts - ambiguous_since_ts) >= (ambiguous_threshold_ms / 1000)
+                            if reanchor_due and ambiguous_due:
+                                logs.append("Login surface became ambiguous; refreshing the publish page.")
+                                page.goto(publish_url, wait_until="domcontentloaded")
+                                _wait_for_publish_home(page)
+                                last_reanchor_ts = now_ts
+                                ambiguous_since_ts = None
+                                qr_switch_attempted = False
+                                continue
 
-                    page.wait_for_timeout(poll_interval_ms)
+                        page.wait_for_timeout(poll_interval_ms)
 
-                timeout_path = artifact_dir / "xiaohongshu-session-login-timeout.png"
-                page.screenshot(path=str(timeout_path), full_page=True)
-                screenshots.append(str(timeout_path))
-                append_artifact("screenshot", "login_timeout", timeout_path, capture="full_page")
-                timeout_error = SessionError(
-                    code="login_timeout",
-                    message=f"Timed out waiting for Xiaohongshu login after {timeout_ms} ms.",
-                )
-                write_progress(
-                    state="failed",
-                    phase="timed_out",
-                    status="login_required",
-                    logged_in=False,
-                    platform_url=page.url,
-                    login_surface=_detect_login_surface(page),
-                    error=timeout_error,
-                )
-                result = XiaohongshuSessionResult(
-                    action=action,
-                    status="login_required",
-                    logged_in=False,
-                    profile_dir=str(settings.profile_dir),
-                    artifact_dir=str(artifact_dir),
-                    progress_file=str(progress_file),
-                    platform_url=page.url,
-                    screenshots=screenshots,
-                    artifacts=artifacts,
-                    logs=logs,
-                    error=timeout_error,
-                )
-                browser.close()
-                return result.to_dict()
+                    timeout_path = artifact_dir / "xiaohongshu-session-login-timeout.png"
+                    page.screenshot(path=str(timeout_path), full_page=True)
+                    screenshots.append(str(timeout_path))
+                    append_artifact("screenshot", "login_timeout", timeout_path, capture="full_page")
+                    timeout_error = SessionError(
+                        code="login_timeout",
+                        message=f"Timed out waiting for Xiaohongshu login after {timeout_ms} ms.",
+                    )
+                    write_progress(
+                        state="failed",
+                        phase="timed_out",
+                        status="login_required",
+                        logged_in=False,
+                        platform_url=page.url,
+                        login_surface=_detect_login_surface(page),
+                        error=timeout_error,
+                    )
+                    result = XiaohongshuSessionResult(
+                        action=action,
+                        status="login_required",
+                        logged_in=False,
+                        profile_dir=str(settings.profile_dir),
+                        artifact_dir=str(artifact_dir),
+                        progress_file=str(progress_file),
+                        platform_url=page.url,
+                        screenshots=screenshots,
+                        artifacts=artifacts,
+                        logs=logs,
+                        error=timeout_error,
+                    )
+                    browser.close()
+                    return result.to_dict()
     except Exception as error:  # pragma: no cover - depends on local browser/session state.
-        session_error = SessionError(code="session_failed", message=str(error), retryable=True)
+        code, message, diagnostic_logs = classify_xiaohongshu_profile_error(
+            error,
+            action=action,
+            profile_dir=settings.profile_dir,
+            stale_lock_removed=stale_lock_removed,
+            default_code="session_failed",
+        )
+        logs.extend(diagnostic_logs)
+        session_error = SessionError(code=code, message=message, retryable=True)
         write_progress(state="failed", phase="failed", status="failed", logged_in=False, error=session_error)
         return XiaohongshuSessionResult(
             action=action,

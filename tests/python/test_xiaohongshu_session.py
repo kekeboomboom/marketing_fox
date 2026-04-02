@@ -2,10 +2,13 @@ import json
 import os
 import sys
 import types
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
+import marketing_fox.publishing.xiaohongshu_session as xiaohongshu_session_module
+from marketing_fox.publishing.connectors.xiaohongshu_profile_lock import XiaohongshuProfileBusyError, XiaohongshuProfileLease
 from marketing_fox.publishing.xiaohongshu_session import run_xiaohongshu_session
 
 
@@ -182,6 +185,7 @@ def _install_fake_playwright(monkeypatch: pytest.MonkeyPatch, page: _FakePage) -
     playwright_module.sync_api = sync_api_module
     monkeypatch.setitem(sys.modules, "playwright", playwright_module)
     monkeypatch.setitem(sys.modules, "playwright.sync_api", sync_api_module)
+    monkeypatch.setenv("DISPLAY", ":99")
     return chromium
 
 
@@ -318,3 +322,95 @@ def test_xiaohongshu_session_login_switches_qr_mode_only_once(
     assert result["status"] == "login_required"
     assert result["error"]["code"] == "login_timeout"
     assert page.qr_switch_clicks == 1
+
+
+def test_xiaohongshu_session_check_fails_fast_without_display_when_headed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = _FakePage(success_after_polls=1)
+    chromium = _install_fake_playwright(monkeypatch, page)
+    monkeypatch.delenv("DISPLAY", raising=False)
+
+    result = run_xiaohongshu_session(
+        {
+            "action": "check",
+            "options": {
+                "xhs_session_artifact_dir": str(tmp_path / "artifacts"),
+                "xhs_session_progress_file": str(tmp_path / "progress.json"),
+            },
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "missing_display"
+    assert "DISPLAY is not set" in result["error"]["message"]
+    assert "display=<unset>" in result["logs"][1]
+    assert "Cannot launch a headed Xiaohongshu browser because DISPLAY is not set." in result["logs"]
+    assert chromium.launch_playwright_browsers_path is None
+
+
+def test_xiaohongshu_session_returns_profile_busy_when_profile_lease_is_held(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = _FakePage(success_after_polls=1)
+    _install_fake_playwright(monkeypatch, page)
+
+    @contextmanager
+    def raise_busy(_profile_dir: Path, _action: str):
+        lease = XiaohongshuProfileLease(
+            profile_dir=tmp_path / "xhs-profile",
+            lock_path=tmp_path / "xhs-profile" / ".marketing_fox_profile.lock",
+            action="check",
+            holder_host="busy-host",
+            holder_pid=4321,
+            current_host="current-host",
+            current_pid=9876,
+        )
+        raise XiaohongshuProfileBusyError(lease)
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(xiaohongshu_session_module, "acquire_xiaohongshu_profile_lease", raise_busy)
+
+    result = run_xiaohongshu_session(
+        {
+            "action": "check",
+            "options": {
+                "xhs_session_artifact_dir": str(tmp_path / "artifacts"),
+                "xhs_session_progress_file": str(tmp_path / "progress.json"),
+            },
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "profile_busy"
+    assert any("lease_lock_path=" in line for line in result["logs"])
+
+
+def test_xiaohongshu_session_classifies_process_singleton_failure_as_profile_busy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    page = _FakePage(success_after_polls=1)
+    chromium = _install_fake_playwright(monkeypatch, page)
+
+    def raise_singleton(**kwargs):
+        raise RuntimeError(
+            "BrowserType.launch_persistent_context: Failed to create a ProcessSingleton for your profile directory. "
+            "Failed to create /tmp/xhs-profile/SingletonLock"
+        )
+
+    chromium.launch_persistent_context = raise_singleton  # type: ignore[method-assign]
+
+    result = run_xiaohongshu_session(
+        {
+            "action": "check",
+            "options": {
+                "xhs_profile_dir": str(tmp_path / "xhs-profile"),
+                "xhs_session_artifact_dir": str(tmp_path / "artifacts"),
+                "xhs_session_progress_file": str(tmp_path / "progress.json"),
+            },
+        }
+    )
+
+    assert result["status"] == "failed"
+    assert result["error"]["code"] == "profile_busy"
+    assert any("ProcessSingleton conflict" in line for line in result["logs"])

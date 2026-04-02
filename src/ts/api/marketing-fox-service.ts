@@ -165,6 +165,25 @@ export class MarketingFoxService {
   ): Promise<{ session: Awaited<ReturnType<ServiceAdapters["checkXiaohongshuSession"]>>; statusCode: number }> {
     this.requireActor(actor);
     const options = validateOptionsObject(payload.options);
+    const lockKey = "xhs_profile_default";
+    const activeJob = this.store.findActiveJobByLock(lockKey);
+    if (activeJob) {
+      this.logger.warn("xhs_session_check_conflict", {
+        actor_kind: actor.kind,
+        actor_subject: actor.subject,
+        active_job_id: activeJob.id,
+        active_job_kind: activeJob.kind,
+        lock_key: lockKey
+      });
+      throw conflict(
+        "profile_busy",
+        "Another Xiaohongshu browser session is already active for this profile.",
+        {
+          active_job_id: activeJob.id,
+          active_job_kind: activeJob.kind
+        }
+      );
+    }
     const startedAt = Date.now();
     this.logger.info("xhs_session_check_started", {
       actor_kind: actor.kind,
@@ -182,9 +201,36 @@ export class MarketingFoxService {
       log_count: session.logs.length,
       error_code: session.error?.code
     });
+    if (session.status === "failed") {
+      this.logger.error("xhs_session_check_failed", {
+        actor_kind: actor.kind,
+        actor_subject: actor.subject,
+        status: session.status,
+        logged_in: session.logged_in,
+        profile_dir: session.profile_dir,
+        artifact_dir: session.artifact_dir,
+        progress_file: session.progress_file,
+        error_code: session.error?.code,
+        error_message: session.error?.message,
+        logs_tail: session.logs.slice(-5)
+      });
+    } else if (session.error) {
+      this.logger.warn("xhs_session_check_warning", {
+        actor_kind: actor.kind,
+        actor_subject: actor.subject,
+        status: session.status,
+        logged_in: session.logged_in,
+        profile_dir: session.profile_dir,
+        artifact_dir: session.artifact_dir,
+        progress_file: session.progress_file,
+        error_code: session.error.code,
+        error_message: session.error.message,
+        logs_tail: session.logs.slice(-5)
+      });
+    }
     return {
       session,
-      statusCode: session.error?.code === "missing_dependency" ? 503 : 200
+      statusCode: session.error?.code === "missing_dependency" || session.error?.code === "missing_display" ? 503 : 200
     };
   }
 

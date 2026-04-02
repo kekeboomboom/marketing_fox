@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { getTrackedJobId, hasJobReachedStatus } from "../lib/xhs-console-state";
+import { getTrackedJobId, hasActiveXhsBrowserJob, hasJobReachedStatus } from "../lib/xhs-console-state";
 
 type SessionStatus = "logged_in" | "login_required" | "failed";
 type JobStatus = "queued" | "running" | "succeeded" | "failed" | "cancelled";
@@ -179,29 +179,36 @@ export function XhsConsole() {
       }
 
       setAuthChecked(true);
-      await attachActiveJobs();
-      await refreshSession(false);
+      const attached = await attachActiveJobs();
+      if (!hasActiveXhsBrowserJob(attached.loginJob, attached.publishJob)) {
+        await refreshSession(false);
+      }
     } catch (error) {
       setUiError(error instanceof Error ? error.message : "无法初始化控制台。");
     }
   }
 
-  async function attachActiveJobs() {
+  async function attachActiveJobs(): Promise<{ loginJob: JobRecord | null; publishJob: JobRecord | null }> {
     const loginJobId = window.localStorage.getItem(LOGIN_JOB_KEY);
     const publishJobId = window.localStorage.getItem(PUBLISH_JOB_KEY);
+    let resolvedLoginJob: JobRecord | null = null;
+    let resolvedPublishJob: JobRecord | null = null;
 
     if (loginJobId) {
-      await refreshJob(loginJobId, "login");
+      resolvedLoginJob = await refreshJob(loginJobId, "login");
     }
     if (publishJobId) {
-      await refreshJob(publishJobId, "publish");
+      resolvedPublishJob = await refreshJob(publishJobId, "publish");
     }
 
     const response = await fetch("/api/v1/jobs?platform=xiaohongshu&status=active&limit=10", {
       cache: "no-store"
     });
     if (!response.ok) {
-      return;
+      return {
+        loginJob: resolvedLoginJob,
+        publishJob: resolvedPublishJob
+      };
     }
 
     const payload = await readJsonResponse<{ jobs?: JobRecord[] }>(response);
@@ -211,13 +218,23 @@ export function XhsConsole() {
 
     if (!loginJobId && activeLogin) {
       setLoginJob(activeLogin);
+      resolvedLoginJob = activeLogin;
     }
     if (!publishJobId && activePublish) {
       setPublishJob(activePublish);
+      resolvedPublishJob = activePublish;
     }
+
+    return {
+      loginJob: resolvedLoginJob,
+      publishJob: resolvedPublishJob
+    };
   }
 
-  async function refreshSession(withIndicator = true) {
+  async function refreshSession(withIndicator = true, force = false) {
+    if (!force && hasActiveXhsBrowserJob(loginJob, publishJob)) {
+      return;
+    }
     if (sessionRefreshInFlightRef.current) {
       return;
     }
@@ -261,7 +278,7 @@ export function XhsConsole() {
     }
   }
 
-  async function refreshJob(jobId: string, target: "login" | "publish") {
+  async function refreshJob(jobId: string, target: "login" | "publish"): Promise<JobRecord | null> {
     const response = await fetch(`/api/v1/jobs/${encodeURIComponent(jobId)}`, {
       cache: "no-store"
     });
@@ -271,16 +288,16 @@ export function XhsConsole() {
       } else {
         setPublishJob(null);
       }
-      return;
+      return null;
     }
     if (response.status === 401) {
       router.replace("/login");
-      return;
+      return null;
     }
 
     const payload = await readJsonResponse<{ job?: JobRecord; error?: ApiErrorPayload }>(response);
     if (!response.ok || !payload.job) {
-      return;
+      return null;
     }
 
     if (target === "login") {
@@ -289,7 +306,7 @@ export function XhsConsole() {
       setLoginJob(payload.job);
       if (hasJobReachedStatus(previousStatus, payload.job.status, "succeeded")) {
         setActionState("publishing");
-        await refreshSession(false);
+        await refreshSession(false, true);
         await maybeResumePublish();
       }
       if (
@@ -305,7 +322,7 @@ export function XhsConsole() {
       if (hasJobReachedStatus(previousStatus, payload.job.status, "succeeded")) {
         setActionState("done");
         window.localStorage.removeItem(PENDING_PAYLOAD_KEY);
-        await refreshSession(false);
+        await refreshSession(false, true);
       }
       if (
         hasJobReachedStatus(previousStatus, payload.job.status, "failed") ||
@@ -314,6 +331,7 @@ export function XhsConsole() {
         setActionState("idle");
       }
     }
+    return payload.job;
   }
 
   async function createPublishJob(sourceIdea: string) {
@@ -390,6 +408,16 @@ export function XhsConsole() {
     }
 
     setUiError(null);
+    if (getTrackedJobId(loginJob)) {
+      setActionState("logging_in");
+      window.localStorage.setItem(PENDING_PAYLOAD_KEY, JSON.stringify({ source_idea: sourceIdea }));
+      return;
+    }
+    if (getTrackedJobId(publishJob)) {
+      setActionState("publishing");
+      window.localStorage.setItem(PENDING_PAYLOAD_KEY, JSON.stringify({ source_idea: sourceIdea }));
+      return;
+    }
     setActionState("checking");
     window.localStorage.setItem(PENDING_PAYLOAD_KEY, JSON.stringify({ source_idea: sourceIdea }));
 
@@ -488,7 +516,12 @@ export function XhsConsole() {
         </div>
         <div className="header-actions">
           <span className={`status-pill ${sessionBadge.tone}`}>{sessionBadge.label}</span>
-          <button className="ghost-button" type="button" onClick={() => void refreshSession(true)} disabled={isRefreshingSession}>
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => void refreshSession(true)}
+            disabled={isRefreshingSession || hasActiveXhsBrowserJob(loginJob, publishJob)}
+          >
             {isRefreshingSession ? "检查中..." : "重新检查"}
           </button>
           <button className="ghost-button" type="button" onClick={() => void handleLogout()}>

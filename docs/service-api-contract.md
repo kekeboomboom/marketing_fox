@@ -247,6 +247,23 @@ Response `200`:
 }
 ```
 
+Response `409` when the Xiaohongshu profile is already in use by an active
+login or publish job:
+
+```json
+{
+  "error": {
+    "code": "profile_busy",
+    "message": "Another Xiaohongshu browser session is already active for this profile.",
+    "retryable": false,
+    "meta": {
+      "active_job_id": "job_abc123",
+      "active_job_kind": "xhs_session_login"
+    }
+  }
+}
+```
+
 ## `GET /api/v1/platforms`
 
 Purpose:

@@ -355,6 +355,178 @@ test("POST /api/v1/xhs/session/login-bootstrap reuses active login job", async (
   }
 });
 
+test("POST /api/v1/xhs/session/check returns profile_busy when login job holds the xhs profile lock", async () => {
+  let resolveLogin: () => void = () => {};
+  const loginPromise = new Promise<void>((resolve) => {
+    resolveLogin = () => resolve();
+  });
+  const adapters = createBaseAdapters({
+    loginXiaohongshuSession: async () => {
+      await loginPromise;
+      return {
+        action: "login",
+        status: "logged_in",
+        logged_in: true,
+        profile_dir: ".local/xhs-profile",
+        platform_url: "https://creator.xiaohongshu.com/publish/publish",
+        screenshots: [".artifacts/xhs/login-ready.png"],
+        logs: ["login ready"],
+        error: null
+      };
+    }
+  });
+  const { baseUrl, close } = await startServer(adapters);
+
+  try {
+    const loginResponse = await fetch(`${baseUrl}/api/v1/xhs/session/login-bootstrap`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({})
+    });
+    const loginPayload = await readJson<{ job: { id: string } }>(loginResponse);
+
+    assert.equal(loginResponse.status, 202);
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const response = await fetch(`${baseUrl}/api/v1/jobs/${loginPayload.job.id}`, {
+        headers: authHeaders()
+      });
+      const payload = await readJson<{ job: { status: string } }>(response);
+      if (payload.job.status === "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const response = await fetch(`${baseUrl}/api/v1/xhs/session/check`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({})
+    });
+    const payload = await readJson<{ error: { code: string; meta?: Record<string, unknown> } }>(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(payload.error.code, "profile_busy");
+    assert.equal(payload.error.meta?.active_job_id, loginPayload.job.id);
+    assert.equal(payload.error.meta?.active_job_kind, "xhs_session_login");
+  } finally {
+    resolveLogin();
+    await close();
+  }
+});
+
+test("POST /api/v1/xhs/session/check returns profile_busy when publish job holds the xhs profile lock", async () => {
+  let resolvePublish: () => void = () => {};
+  const publishPromise = new Promise<void>((resolve) => {
+    resolvePublish = () => resolve();
+  });
+  const adapters = createBaseAdapters({
+    runPublishIntent: async (intent) => {
+      await publishPromise;
+      return {
+        platform: intent.platform,
+        mode: intent.mode,
+        status: "published",
+        draft_artifact: {
+          platform: intent.platform,
+          title: "Example",
+          body: "Body",
+          tags: [],
+          metadata: {}
+        },
+        platform_post_id: "post-123",
+        platform_url: "https://example.com/post-123",
+        screenshots: [".artifacts/publishing/final.png"],
+        logs: ["publish completed"],
+        error: null
+      };
+    }
+  });
+  const { baseUrl, close } = await startServer(adapters);
+
+  try {
+    const publishResponse = await fetch(`${baseUrl}/api/v1/publish`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({
+        platform: "xiaohongshu",
+        source_idea: "Publish this as a Xiaohongshu note",
+        mode: "publish"
+      })
+    });
+    const publishPayload = await readJson<{ job: { id: string } }>(publishResponse);
+
+    assert.equal(publishResponse.status, 202);
+
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const response = await fetch(`${baseUrl}/api/v1/jobs/${publishPayload.job.id}`, {
+        headers: authHeaders()
+      });
+      const payload = await readJson<{ job: { status: string } }>(response);
+      if (payload.job.status === "running") {
+        break;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const response = await fetch(`${baseUrl}/api/v1/xhs/session/check`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({})
+    });
+    const payload = await readJson<{ error: { code: string; meta?: Record<string, unknown> } }>(response);
+
+    assert.equal(response.status, 409);
+    assert.equal(payload.error.code, "profile_busy");
+    assert.equal(payload.error.meta?.active_job_id, publishPayload.job.id);
+    assert.equal(payload.error.meta?.active_job_kind, "publish");
+  } finally {
+    resolvePublish();
+    await close();
+  }
+});
+
+test("POST /api/v1/xhs/session/check returns 503 for missing display", async () => {
+  const { baseUrl, close } = await startServer(
+    createBaseAdapters({
+      checkXiaohongshuSession: async () => ({
+        action: "check",
+        status: "failed",
+        logged_in: false,
+        profile_dir: "/data/marketing_fox/xhs-profile",
+        artifact_dir: ".artifacts/xiaohongshu-session/example",
+        progress_file: ".artifacts/xiaohongshu-session/example/progress.json",
+        platform_url: null,
+        screenshots: [],
+        logs: [
+          "Using Xiaohongshu profile directory: /data/marketing_fox/xhs-profile",
+          "Resolved Xiaohongshu browser runtime: headless=false, display=<unset>, channel=<default>, executable_path=<bundled>",
+          "Cannot launch a headed Xiaohongshu browser because DISPLAY is not set."
+        ],
+        error: {
+          code: "missing_display",
+          message: "DISPLAY is not set while Xiaohongshu session automation is running with headless=false.",
+          retryable: true
+        }
+      })
+    })
+  );
+
+  try {
+    const response = await fetch(`${baseUrl}/api/v1/xhs/session/check`, {
+      method: "POST",
+      headers: authHeaders(),
+      body: JSON.stringify({})
+    });
+    const payload = await readJson<{ session: { error: { code: string } } }>(response);
+
+    assert.equal(response.status, 503);
+    assert.equal(payload.session.error.code, "missing_display");
+  } finally {
+    await close();
+  }
+});
+
 test("GET /api/v1/jobs/:id/artifacts/:artifactId streams an artifact", async () => {
   const artifactDir = path.resolve(process.cwd(), ".artifacts", "test-api-service");
   fs.mkdirSync(artifactDir, { recursive: true });

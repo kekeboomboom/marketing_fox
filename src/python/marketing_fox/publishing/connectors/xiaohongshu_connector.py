@@ -5,12 +5,17 @@ import os
 import struct
 import sys
 import zlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from ..models import DraftArtifact, PublishIntent, PublishResult, RunContext
 from .base import PublishConnector
+from .xiaohongshu_profile_lock import (
+    acquire_xiaohongshu_profile_lease,
+    classify_xiaohongshu_profile_error,
+    clear_stale_profile_singleton,
+)
 
 DEFAULT_URL = "https://creator.xiaohongshu.com/publish/publish"
 TITLE_SELECTORS = [
@@ -170,45 +175,60 @@ class XiaohongshuConnector(PublishConnector):
         settings = _resolve_browser_settings(intent.options)
         screenshots: list[str] = []
 
+        stale_lock_removed = False
         try:
-            with _override_playwright_browser_cache_dir(settings):
-                with self._playwright_module() as playwright:
-                    browser = playwright.chromium.launch_persistent_context(
-                        user_data_dir=str(settings.profile_dir),
-                        headless=settings.headless,
-                        executable_path=settings.executable_path,
-                        channel=settings.channel,
-                        locale=settings.locale,
-                        timezone_id=settings.timezone_id,
-                        args=settings.launch_args,
-                    )
-                    page = browser.new_page()
-                    page.goto(intent.options.get("xhs_publish_url", DEFAULT_URL), wait_until="domcontentloaded")
-                    _wait_for_publish_home(page)
-
-                    if _looks_logged_out(page):
-                        browser.close()
-                        return self.failed_result(
-                            intent,
-                            draft,
-                            "login_required",
-                            "Xiaohongshu session is not logged in. Complete a manual login in the persistent profile first.",
+            with acquire_xiaohongshu_profile_lease(settings.profile_dir, "publish"):
+                stale_lock_removed = clear_stale_profile_singleton(settings.profile_dir)
+                logs: list[str] = []
+                if stale_lock_removed:
+                    logs.append("Removed a stale Chromium profile lock before launching Xiaohongshu.")
+                with _override_playwright_browser_cache_dir(settings):
+                    with self._playwright_module() as playwright:
+                        browser = playwright.chromium.launch_persistent_context(
+                            user_data_dir=str(settings.profile_dir),
+                            headless=settings.headless,
+                            executable_path=settings.executable_path,
+                            channel=settings.channel,
+                            locale=settings.locale,
+                            timezone_id=settings.timezone_id,
+                            args=settings.launch_args,
                         )
+                        page = browser.new_page()
+                        page.goto(intent.options.get("xhs_publish_url", DEFAULT_URL), wait_until="domcontentloaded")
+                        _wait_for_publish_home(page)
 
-                    flow = str(intent.options.get("xhs_note_flow") or "").strip().lower()
-                    if flow == "legacy_upload":
-                        result = self._run_legacy_upload_flow(intent, draft, context, page, screenshots)
-                    else:
-                        result = self._run_text_image_flow(intent, draft, context, page, screenshots)
+                        if _looks_logged_out(page):
+                            browser.close()
+                            return self.failed_result(
+                                intent,
+                                draft,
+                                "login_required",
+                                "Xiaohongshu session is not logged in. Complete a manual login in the persistent profile first.",
+                                *logs,
+                            )
 
-                    browser.close()
-                    return result
+                        flow = str(intent.options.get("xhs_note_flow") or "").strip().lower()
+                        if flow == "legacy_upload":
+                            result = self._run_legacy_upload_flow(intent, draft, context, page, screenshots)
+                        else:
+                            result = self._run_text_image_flow(intent, draft, context, page, screenshots)
+
+                        browser.close()
+                        return replace(result, logs=[*logs, *result.logs]) if logs else result
         except Exception as error:  # pragma: no cover - depends on local browser/session state.
+            code, message, diagnostic_logs = classify_xiaohongshu_profile_error(
+                error,
+                action="publish",
+                profile_dir=settings.profile_dir,
+                stale_lock_removed=stale_lock_removed,
+                default_code="publish_failed",
+            )
             return self.failed_result(
                 intent,
                 draft,
-                "publish_failed",
-                str(error),
+                code,
+                message,
+                *diagnostic_logs,
                 retryable=True,
                 screenshots=screenshots,
             )
@@ -730,6 +750,9 @@ def _parse_browser_args(raw_args: Any) -> list[str]:
         return []
 
     return [part.strip() for part in str(raw_args).split(",") if part.strip()]
+
+
+_clear_stale_profile_singleton = clear_stale_profile_singleton
 
 
 def _apply_smart_title(page: Any, fallback_title: str | None = None) -> str | None:
