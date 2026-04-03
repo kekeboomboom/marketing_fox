@@ -456,22 +456,30 @@ def _fill_first(page: Any, selectors: list[str], value: str) -> bool:
     return False
 
 
-def _wait_for_publish_home(page: Any) -> None:
-    try:
-        page.wait_for_load_state("networkidle", timeout=15000)
-    except Exception:
-        pass
+def _wait_for_publish_home(page: Any, *, allow_login_surface: bool = False) -> None:
+    ready_selectors = IMAGE_NOTE_TAB_SELECTORS + TEXT_IMAGE_ENTRY_SELECTORS
+    if allow_login_surface:
+        ready_selectors += LOGIN_SURFACE_SELECTORS
 
-    compose_selectors = IMAGE_NOTE_TAB_SELECTORS + TEXT_IMAGE_ENTRY_SELECTORS
-    for selector in compose_selectors:
-        try:
-            page.wait_for_selector(selector, timeout=3000)
-            page.wait_for_timeout(3000)
-            return
-        except Exception:
-            continue
+    settled_once = False
+    max_attempts = 8 if allow_login_surface else 10
+    probe_timeout_ms = 500 if allow_login_surface else 1000
 
-    page.wait_for_timeout(3000)
+    for _ in range(max_attempts):
+        for selector in ready_selectors:
+            if _selector_count(page, selector) > 0:
+                if not allow_login_surface:
+                    page.wait_for_timeout(1000)
+                return
+
+        if not settled_once:
+            try:
+                page.wait_for_load_state("networkidle", timeout=1500 if allow_login_surface else 4000)
+            except Exception:
+                pass
+            settled_once = True
+
+        page.wait_for_timeout(probe_timeout_ms)
 
 
 def _switch_to_image_note_tab(page: Any) -> None:

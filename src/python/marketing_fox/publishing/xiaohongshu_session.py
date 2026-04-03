@@ -273,7 +273,7 @@ def run_xiaohongshu_session(payload: dict[str, Any]) -> dict[str, Any]:
 
                     write_progress(phase="opening_publish_page")
                     page.goto(publish_url, wait_until="domcontentloaded")
-                    _wait_for_publish_home(page)
+                    _wait_for_publish_home(page, allow_login_surface=True)
 
                     write_progress(phase="capturing_initial_state", platform_url=page.url)
                     initial_path = artifact_dir / f"xiaohongshu-session-{action}-initial.png"
@@ -448,7 +448,7 @@ def run_xiaohongshu_session(payload: dict[str, Any]) -> dict[str, Any]:
                             if reanchor_due and ambiguous_due:
                                 logs.append("Login surface became ambiguous; refreshing the publish page.")
                                 page.goto(publish_url, wait_until="domcontentloaded")
-                                _wait_for_publish_home(page)
+                                _wait_for_publish_home(page, allow_login_surface=True)
                                 last_reanchor_ts = now_ts
                                 ambiguous_since_ts = None
                                 qr_switch_attempted = False

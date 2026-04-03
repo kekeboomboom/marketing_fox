@@ -181,7 +181,10 @@ export function XhsConsole() {
       setAuthChecked(true);
       const attached = await attachActiveJobs();
       if (!hasActiveXhsBrowserJob(attached.loginJob, attached.publishJob)) {
-        await refreshSession(false);
+        const sessionSnapshot = await refreshSession(false);
+        if (sessionSnapshot && !sessionSnapshot.logged_in && sessionSnapshot.status === "login_required") {
+          await ensureLoginJob();
+        }
       }
     } catch (error) {
       setUiError(error instanceof Error ? error.message : "无法初始化控制台。");
@@ -215,12 +218,16 @@ export function XhsConsole() {
     const jobs = payload.jobs ?? [];
     const activeLogin = jobs.find((job) => job.kind === "xhs_session_login");
     const activePublish = jobs.find((job) => job.kind === "publish");
+    const shouldAdoptActiveLogin =
+      !!activeLogin && (!resolvedLoginJob || (resolvedLoginJob.status !== "queued" && resolvedLoginJob.status !== "running"));
+    const shouldAdoptActivePublish =
+      !!activePublish && (!resolvedPublishJob || (resolvedPublishJob.status !== "queued" && resolvedPublishJob.status !== "running"));
 
-    if (!loginJobId && activeLogin) {
+    if (shouldAdoptActiveLogin) {
       setLoginJob(activeLogin);
       resolvedLoginJob = activeLogin;
     }
-    if (!publishJobId && activePublish) {
+    if (shouldAdoptActivePublish) {
       setPublishJob(activePublish);
       resolvedPublishJob = activePublish;
     }
@@ -231,12 +238,12 @@ export function XhsConsole() {
     };
   }
 
-  async function refreshSession(withIndicator = true, force = false) {
+  async function refreshSession(withIndicator = true, force = false): Promise<SessionResult | null> {
     if (!force && hasActiveXhsBrowserJob(loginJob, publishJob)) {
-      return;
+      return session;
     }
     if (sessionRefreshInFlightRef.current) {
-      return;
+      return session;
     }
     sessionRefreshInFlightRef.current = true;
     if (withIndicator) {
@@ -255,7 +262,7 @@ export function XhsConsole() {
 
       if (response.status === 401) {
         router.replace("/login");
-        return;
+        return null;
       }
 
       const payload = await readJsonResponse<{ session?: SessionResult; error?: ApiErrorPayload }>(response);
@@ -268,8 +275,10 @@ export function XhsConsole() {
 
       setSession(payload.session);
       setSessionCheckedAt(new Date().toISOString());
+      return payload.session;
     } catch (error) {
       setUiError(error instanceof Error ? error.message : "无法读取小红书登录状态。");
+      return null;
     } finally {
       sessionRefreshInFlightRef.current = false;
       if (withIndicator) {
@@ -305,9 +314,14 @@ export function XhsConsole() {
       jobStatusRef.current.loginStatus = payload.job.status;
       setLoginJob(payload.job);
       if (hasJobReachedStatus(previousStatus, payload.job.status, "succeeded")) {
-        setActionState("publishing");
-        await refreshSession(false, true);
-        await maybeResumePublish();
+        const sessionSnapshot = await refreshSession(false, true);
+        if (sessionSnapshot?.logged_in) {
+          setLoginJob(null);
+        }
+        const resumedPublish = await maybeResumePublish();
+        if (!resumedPublish) {
+          setActionState("idle");
+        }
       }
       if (
         hasJobReachedStatus(previousStatus, payload.job.status, "failed") ||
@@ -367,6 +381,16 @@ export function XhsConsole() {
   }
 
   async function ensureLoginJob() {
+    if (loginJob && (loginJob.status === "queued" || loginJob.status === "running")) {
+      setActionState("logging_in");
+      return;
+    }
+    if (sessionRefreshInFlightRef.current) {
+      setActionState("checking");
+      setUiError("正在检查登录状态，请稍候再生成二维码。");
+      return;
+    }
+
     const response = await fetch("/api/v1/xhs/session/login-bootstrap", {
       method: "POST",
       headers: {
@@ -383,21 +407,23 @@ export function XhsConsole() {
     setActionState("logging_in");
   }
 
-  async function maybeResumePublish() {
+  async function maybeResumePublish(): Promise<boolean> {
     const raw = window.localStorage.getItem(PENDING_PAYLOAD_KEY);
     if (!raw || publishJob?.status === "running" || publishJob?.status === "queued") {
-      return;
+      return false;
     }
 
     try {
       const payload = JSON.parse(raw) as { source_idea?: string };
       const sourceIdea = payload.source_idea?.trim() ?? "";
       if (!sourceIdea) {
-        return;
+        return false;
       }
       await createPublishJob(sourceIdea);
+      return true;
     } catch {
       window.localStorage.removeItem(PENDING_PAYLOAD_KEY);
+      return false;
     }
   }
 
@@ -504,8 +530,21 @@ export function XhsConsole() {
     return liveArtifacts.length > 0 ? liveArtifacts : loginJob?.artifacts ?? [];
   }, [loginJob]);
 
-  const qrArtifact = latestArtifacts.find((artifact) => artifact.type === "qr") ?? null;
+  const qrArtifact = latestArtifacts.find(isQrArtifactCandidate) ?? null;
   const finalArtifact = publishJob?.artifacts.at(-1) ?? null;
+  const isLoginJobActive = loginJob?.status === "queued" || loginJob?.status === "running";
+  const shouldShowLoginArtifact = Boolean(qrArtifact && loginJob && isLoginJobActive && !session?.logged_in);
+  const qrArtifactUrl =
+    shouldShowLoginArtifact && loginJob && qrArtifact
+      ? `/api/v1/jobs/${encodeURIComponent(loginJob.id)}/artifacts/${encodeURIComponent(qrArtifact.id)}`
+      : null;
+  const sessionHelpMessage =
+    loginJob?.progress?.status_message ??
+    (session?.logged_in
+      ? publishJob && (publishJob.status === "queued" || publishJob.status === "running")
+        ? "扫码完成，登录页已收起，系统正在继续发布。"
+        : "扫码完成，登录页已收起，当前小红书会话可直接用于发布。"
+      : session?.logs?.at(-1) ?? "系统会先检查会话，再决定是否需要扫码登录。");
 
   return (
     <main className="console-shell">
@@ -544,15 +583,17 @@ export function XhsConsole() {
               </p>
               <p>
                 <strong>Phase</strong>
-                <span>{humanizePhase(loginJob?.progress?.phase ?? null)}</span>
+                <span>{session?.logged_in && !isLoginJobActive ? "已登录" : humanizePhase(loginJob?.progress?.phase ?? null)}</span>
               </p>
             </div>
-            {qrArtifact && loginJob ? (
+            {shouldShowLoginArtifact ? (
               <div className="artifact-frame">
-                <img
-                  alt="Xiaohongshu login artifact"
-                  src={`/api/v1/jobs/${encodeURIComponent(loginJob.id)}/artifacts/${encodeURIComponent(qrArtifact.id)}`}
-                />
+                <img alt="Xiaohongshu login artifact" src={qrArtifactUrl ?? undefined} />
+              </div>
+            ) : session?.logged_in ? (
+              <div className="artifact-placeholder">
+                <p>扫码完成后，登录页会自动收起。</p>
+                <p>当前账号已经登录，可以继续检查会话或直接进入发布流程。</p>
               </div>
             ) : (
               <div className="artifact-placeholder">
@@ -560,8 +601,13 @@ export function XhsConsole() {
               </div>
             )}
             <div className="session-help">
-              <p>{loginJob?.progress?.status_message ?? session?.logs?.at(-1) ?? "系统会先检查会话，再决定是否需要扫码登录。"}</p>
-              <button className="secondary-button" type="button" onClick={() => void ensureLoginJob()}>
+              <p>{sessionHelpMessage}</p>
+              <button
+                className="secondary-button"
+                type="button"
+                onClick={() => void ensureLoginJob()}
+                disabled={isRefreshingSession || actionState === "checking" || hasActiveXhsBrowserJob(loginJob, publishJob)}
+              >
                 重新生成二维码
               </button>
             </div>
@@ -648,6 +694,10 @@ export function XhsConsole() {
       </section>
     </main>
   );
+}
+
+function isQrArtifactCandidate(artifact: JobArtifact): boolean {
+  return artifact.type === "qr" || artifact.path.includes("login-qr");
 }
 
 function humanizePhase(phase: string | null): string {

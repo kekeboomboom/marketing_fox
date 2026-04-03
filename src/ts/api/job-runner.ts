@@ -386,9 +386,13 @@ function artifactsFromProgress(progress: XiaohongshuSessionProgress, artifactsDi
     if (!item.path) {
       continue;
     }
+    const looksLikeQrArtifact =
+      item.type === "qr" ||
+      (typeof item.role === "string" && item.role.startsWith("login_qr")) ||
+      item.path.includes("login-qr");
     const created = createArtifact({
       artifactPath: item.path,
-      type: item.type === "qr" ? "qr" : "screenshot",
+      type: looksLikeQrArtifact ? "qr" : "screenshot",
       artifactsDir
     });
     if (created) {
