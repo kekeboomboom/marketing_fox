@@ -247,23 +247,6 @@ Response `200`:
 }
 ```
 
-Response `409` when the Xiaohongshu profile is already in use by an active
-login or publish job:
-
-```json
-{
-  "error": {
-    "code": "profile_busy",
-    "message": "Another Xiaohongshu browser session is already active for this profile.",
-    "retryable": false,
-    "meta": {
-      "active_job_id": "job_abc123",
-      "active_job_kind": "xhs_session_login"
-    }
-  }
-}
-```
-
 ## `GET /api/v1/platforms`
 
 Purpose:
@@ -341,6 +324,7 @@ Response `202`:
 
 Validation failures return `400`.
 Authentication failures return `401`.
+Conflicts return `409` when another Xiaohongshu job already holds the shared profile lock.
 
 Important execution rule:
 
@@ -368,6 +352,47 @@ Request:
 Response `202`:
 
 - same job envelope as `POST /api/v1/publish`
+
+## `GET /api/v1/jobs`
+
+Purpose:
+List jobs for the operator console and polling clients.
+
+Current query filters:
+
+- `platform=<platform_id>`
+- `kind=publish|xhs_session_login`
+- `status=queued|running|succeeded|failed|cancelled|active`
+- `limit=<1-200>`
+
+Response `200`:
+
+```json
+{
+  "jobs": [
+    {
+      "id": "job_01HQK8R6M9V2Y4P7Q5Z1B3C8D0",
+      "kind": "publish",
+      "status": "running",
+      "created_at": "2026-03-23T09:30:00Z",
+      "updated_at": "2026-03-23T09:30:03Z",
+      "request": {
+        "platform": "xiaohongshu",
+        "mode": "publish"
+      },
+      "result": null,
+      "error": null,
+      "artifacts": [],
+      "logs_tail": [
+        "Browser launched."
+      ],
+      "progress": null,
+      "started_at": "2026-03-23T09:30:01Z",
+      "finished_at": null
+    }
+  ]
+}
+```
 
 ## `GET /api/v1/jobs/{job_id}`
 
@@ -467,6 +492,26 @@ Response `200`:
 }
 ```
 
+Response `409` when the Xiaohongshu profile is already in use by an active
+login or publish job:
+
+```json
+{
+  "error": {
+    "code": "profile_busy",
+    "message": "Another Xiaohongshu browser session is already active for this profile.",
+    "retryable": false,
+    "meta": {
+      "active_job_id": "job_abc123",
+      "active_job_kind": "xhs_session_login"
+    }
+  }
+}
+```
+
+Response `503` when the runtime cannot open the browser environment, for
+example because the browser dependency or display server is missing.
+
 ## `POST /api/v1/xhs/session/login-bootstrap`
 
 Purpose:
@@ -497,7 +542,8 @@ Response `202`:
     "error": null,
     "artifacts": [],
     "logs_tail": []
-  }
+  },
+  "reused": false
 }
 ```
 
@@ -505,6 +551,7 @@ Completion behavior:
 
 - when successful, the job `result` should contain the normalized session result with `action: "login"`
 - when unsuccessful, the job should fail with an explicit session or runtime error
+- if another login-bootstrap job is already active for the same profile, the service returns that existing job with `reused: true`
 
 ## `GET /api/v1/jobs/{job_id}/artifacts/{artifact_id}`
 
