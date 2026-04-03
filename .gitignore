@@ -26,6 +26,7 @@ Thumbs.db
 *.tsbuildinfo
 .artifacts/
 .next/
+next-env.d.ts
 .local/
 runtime/
 output/
